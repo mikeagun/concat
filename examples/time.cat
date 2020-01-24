@@ -1,0 +1,161 @@
+#Copyright (C) 2020 D. Michael Agun
+#
+#Licensed under the Apache License, Version 2.0 (the "License");
+#you may not use this file except in compliance with the License.
+#You may obtain a copy of the License at
+#
+#http://www.apache.org/licenses/LICENSE-2.0
+#
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+
+#time manipulation library
+
+#functions for extracting various time fields from a time represented in seconds
+[ dup toint 60 / 60 * - ] \getseconds def
+[ 60 / toint 60 % ]       \getminutes def
+[ 3600 / toint 24 % ]     \gethours def
+[ 86400 / toint 365 % ]   \getdays def
+[ 31536000 / toint ]      \getyears def
+
+#convert various time units into seconds
+[] \seconds def
+[ 60 * ] \minutes def
+[ 3600 * ] \hours def
+[ 86400 * ] \days def
+[ 31536000 * ] \years def
+
+#function for printing time as years/days/hours/minutes/seconds
+#  - years/days are optionally printing with y/d suffix if non-zero
+[ #| seconds
+  dup 31536000 / toint #| seconds years
+  dup [ dup print_ "y" print_ ] if 31536000 * - #print years and then subtract them out
+  dup 86400 / toint    #| seconds days
+  dup [ dup print_ "d" print_ ] if 86400 * - #print days and then subtract them out
+  dup 3600 / toint    #| seconds hours
+  dup dup 10 < ["0" print_] if print_ 3600 * - #print hours and then subtract them out (and pad zero if <10)
+  ":" print_
+  dup 60 / toint    #| seconds minutes
+  dup dup 10 < ["0" print_] if print_ 60 * - #print minutes and then subtract them out (and pad zero if <10)
+  ":" print_
+  dup abs 10 < ["0" print_] if print #print seconds (zero padded to 2 digits)
+] \printtime def
+
+#simple time string parsing function -- parses form "XyXdX:X:X" where Xy and Xd are optional -- minimal error checking
+[        #| timestr
+  #check if 'y' occurs in string, assume part before 'y' is year count and parse that out under the remainder string
+  dup "y" find dup 0 ge [   #| str pos   we have a year, so parse that
+    splitn                  #split on "y"
+    1 -1 substr trim        #strip leading "y" from remainder
+    swap trim parsenum      #| remainder years
+    31536000 *              #| remainder yearseconds
+  ] [pop 0] ifelse          #else we just pop the -1 from find and add 0 yearseconds
+  swap                      #| yearseconds remainder
+
+  #check if 'd' occurs in string, assume part before 'd' is day count and parse that out under the remainder string
+  dup "d" find dup 0 ge [   #| str pos   we have days, so parse that
+    splitn                  #split on "d"
+    1 -1 substr trim        #strip leading "d" from remainder
+    swap trim parsenum      #| remainder days
+    86400 *                 #| remainder dayseconds
+  ] [pop 0] ifelse          #else we just pop the -1 from find and add 0 dayseconds
+  swap                      #| yearseconds dayseconds remainder
+
+  #check if ':' occurs in string, assume part before ':' is minutes for now, we will multiply by 60 again for hours if there is a second ':'
+  dup ":" find dup 0 ge [
+    splitn
+    1 -1 substr
+    swap trim parsenum
+    60 *
+  ] [ pop 0 ] ifelse
+  swap                      #| yearseconds dayseconds minuteseconds remainder
+
+  #check if second ':' occurs in string, meaning previous field was hours and current field is minutes
+  dup ":" find dup 0 ge [
+    splitn
+    1 -1 substr
+    swap trim parsenum
+    60 *                    #| yearseconds dayseconds hourseconds/60 remainder minuteseconds
+    #now we convert the hourseconds/60 (which we were previously assuming was minutes) into hourseconds
+    flip3 60 *              #| yearseconds dayseconds minuteseconds remainder hourseconds
+  ] [ pop 0 ] ifelse
+  swap                      #| yearseconds dayseconds hourseconds minutseconds remainder
+
+  #remainder string should now just contain seconds (or be empty)
+  trim dup [parsenum][pop 0] ifelse #| yearseconds dayseconds hourseconds minutseconds seconds
+  + + + +
+] \parsetime def
+
+#"1y"
+#  "in: " print_ dup print_code_
+#  parsetime
+#  "; time: " print_ dup print_code_
+#  "; out: " print_ printtime
+#"1y1d"
+#  "in: " print_ dup print_code_
+#  parsetime
+#  "; time: " print_ dup print_code_
+#  "; out: " print_ printtime
+
+#"1y"
+#[
+#  "in: " print_ dup print_code_
+#  parsetime
+#  "; time: " print_ dup print_code_
+#  "; out: " print_ printtime
+#] dup
+#"1y1d"
+#swap
+#eval
+#eval
+#
+#"1y1d"
+#"1y"
+#[
+#  "in: " print_ dup print_code_
+#  parsetime
+#  "; time: " print_ dup print_code_
+#  "; out: " print_ printtime
+#] dup
+#dip
+#list
+
+#(
+#  "1y"
+#  "1y1d"
+#) [
+#  "in: " print_ dup print_code_
+#  parsetime
+#  "; time: " print_ dup print_code_
+#  "; out: " print_ printtime
+#] each
+
+(
+  "1y"
+  "1y1d"
+  "1:0:0"
+  "0:0:0"
+  "0"
+  "1.1"
+  "0:1"
+  "1:0"
+  "0:0:1"
+  "0:1:0"
+  "1:0:0"
+  "45"
+  "100"
+  "1y1d0:1:0"
+  "1y 0:1:0"
+) [
+  "in: " print_ dup print_code_
+  parsetime
+  "; time: " print_ dup print_code_
+  "; out: " print_ printtime
+] each
+5 minutes printtime
+0 (5 minutes 4 seconds 3 hours) \+ each printtime
+5 minutes 4 seconds 3 hours + + printtime
+list clear

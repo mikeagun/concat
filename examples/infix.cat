@@ -1,0 +1,180 @@
+#Copyright (C) 2020 D. Michael Agun
+#
+#Licensed under the Apache License, Version 2.0 (the "License");
+#you may not use this file except in compliance with the License.
+#You may obtain a copy of the License at
+#
+#http://www.apache.org/licenses/LICENSE-2.0
+#
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+
+#infix parser
+#  - refactors infix code to postfix
+#    - handles fixity and operator precedence
+#  - uses { and } as grouping parens
+#  - set of pre/post/in-fix operators incomplete
+
+[ [dup2 =] findp 0 ge ] \test_in def
+
+[
+  [ { } , ] test_in
+  [
+    dup isident
+    [dup ispush not] only
+    [dup defined] only
+  ] unless
+] \testop def
+
+[ [ dup ! } , quit qstate vstate ] test_in ] \testpostfix def
+
+[ [
+  + - ~ _
+  isnum isstring isident isnative islist iscode islisttype isfile ispush
+  inc dec sqrt log abs sin cos tan asin acos atan
+  toint tofloat parsenum tostring
+  size empty small
+  sort rsort
+  strhash
+  wrap
+  ref deref
+] test_in ] \testprefix def
+
+[ [
+  + - * / , %
+  & | xor
+  < > = lt gt eq le ge ne
+  and or not
+] test_in ] \testinfix def
+
+
+
+
+
+[ \^ = 1 0 ifelse] \op_assoc def #for now just ^ is R-assoc (assignment = should be also)
+
+[
+  tostring [ "()[]{}" "!^" "_*/%" "+-" ] [dup2 find 0 ge] findp popd
+  dup 0 < [pop 99] if
+] \op_prec def
+
+#Shunting yard algorithm:
+#for each val
+#  if op
+#    if postfix op, send out
+#    else if expect value and if prefix op
+#      if -, infix_push('_')
+#      if +, no op
+#      else infix_push (and expect value)
+#    else binary infix op -- handle assoc
+#      while !infix_empty && infix_top is op
+#        if infix_top == ( or ), break
+#        if (op_assoc=L && op_prec>=top_prec) OR (op_assoc=R && op_prec<top_prec)
+#          output op, infix_pop
+#        else break
+#      infix_push
+#  else if pushable
+#    throw error if not expect value
+#    infix_push
+#    expect infix op
+#  else if value ident
+#    throw error if not expect value
+#    expect infix op
+
+[                            #| [infix code]
+  [[] [] 0] dip              #| [code...] [stack...] expect [infix code]
+  [                          #| [code...] [stack...] expect word
+    testop [
+      testpostfix [ #           === postfix op ===
+        [
+          [\} = [
+            pop #pop expect
+            dup [\{ =] findp #find open paren
+            dup -1 = [
+              "ERROR: unexpected }" throw
+            ] [
+              splitn rest \cat dip
+            ] ifelse
+            1 #expect op
+          1 ] only ]
+          [\, = [
+            pop #pop expect
+            dup [\{ =] findp #find open paren (or take everything)
+            dup -1 = [
+              pop cat []
+            ] [
+              splitn \cat dip
+            ] ifelse
+            0 #expect val
+          1 ] only]
+        ] [sip swap] findp -1 = [ #findp case statement
+          #dup2 1 ne ["!expect_op" throw] if
+          bury3 \rpush dip2
+        ] \pop ifelse
+      ] [ #not postfix op
+        testprefix [dup2 0 =] only [ #expect value and === prefix op ===
+          [ #| [code...] [stack...] expect word
+            [\- = [
+              [\_ swap lpush] dip
+            1 ] only]
+            [\+ = [
+              #no-op (prefix +)
+            1 ] only]
+          ] [sip swap] findp -1 = [ #findp case statement
+            #not a special case, just push
+            bury2 \lpush dip       #| [code...] [op stack...] expect
+          ] \pop ifelse
+        ] [ #                     === infix op ===
+          [pop 0] dip                #| [code...] [stack...] 0 word
+          swap [                #| [code...] [stack...] word  <|>  expect
+            [                   #| [code...] [stack...] word  <|>  word expect
+              \op_prec sip      #| [code...] [stack...] op_prec word
+              #dup2 0 < ["invalid op_prec for " swap tostring cat throw] if
+              op_assoc          #| [code...] [stack...] op_prec op_assoc
+              #<0 no check, =0 left precedence, otherwise right precedence
+              dup 0 < [dup2 0 <] unless [
+                pop pop []
+              ] [
+                0 = [
+                  [dup2 op_prec <]
+                ] [
+                  [dup2 op_prec ge]
+                ] ifelse
+                lpush #push word precedence into preccheck
+              ] ifelse                 #| [code...] [stack...] [preccheck]
+              swap                     #| [code...] [preccheck] [stack...]
+              [ # [code...] [preccheck] [stack...] <|> [stack...]
+                [ # find spliti
+                  testop [
+                    dup \{ = [dup \} =] unless
+                    dup3 unless                #| [code...] [preccheck] stackel stackel preccheck
+                  ] only
+                  popd #pop el
+                ] findp popd                   #| [code...] spliti
+              ] sip swap                       #| [code...] [stack...] spliti
+              dup 0 ge [
+               splitn \cat dip
+              ] [
+                pop cat []
+              ] ifelse                         #| [code...] [stack...] spliti
+            ] sip swap lpush                 #| [code...] [word stack...]
+          ] dip                             #| [code...] [stack...] expect
+        ] ifelse
+      ] ifelse
+    ] [
+      dup ispush [ #               === pushable ===
+        #dup2 0 ne ["not expect val" throw] if
+        [pop 1] dip #expect_op
+        bury2 \lpush dip
+      ] [ #                        === value ident ====
+        #dup2 0 ne ["not expect val" throw] if
+        [pop 1] dip #expect_op
+        bury2 \lpush dip
+      ] ifelse
+    ] ifelse
+  ] each               #| [code...] [stack...] expect
+  pop cat
+] \infix def     #| [infix code] -- [postfix code]

@@ -1,0 +1,362 @@
+#Copyright (C) 2020 D. Michael Agun
+#
+#Licensed under the Apache License, Version 2.0 (the "License");
+#you may not use this file except in compliance with the License.
+#You may obtain a copy of the License at
+#
+#http://www.apache.org/licenses/LICENSE-2.0
+#
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+
+#2d bin packing problem (specifically we would like to be able to solve the problem of how to place board cuts)
+
+
+
+[ dup lpop lpop clearlist [swaplt pop] dip rpush rpush ] \board.sortwrap def #wraps a board (x y...) with its sort value as prefix: (area (x y...))
+
+[ \board.sortwrap map rsort \second map ] \rsort.maxside def
+[ \board.sortwrap map sort \second map ] \sort.maxside def
+
+[ dup first 0 le swap second 0 le or ] \board.empty def
+[ lpop [ dup2 first + ] dip lpop [ dup3 second + ] dip lpush lpush ] \board.add def #keeps additional fields from 2nd board
+
+[ dup2 board.empty \popd \lpush ifelse ] \board.lpush def #lpush only if the board isn't empty
+#\lpush \board.lpush def
+
+#test whether board 1 fits inside board 2 (without rotation)
+[                         #| (x1 y1...) (x2 y2...)
+  [ lpop lpop pop ] dip   #| x1 y1 (x2 y2...)
+  lpop lpop pop           #| x1 y1 x2 y2
+  swapd le \le dip and    #| y1<=y2&&x1<=x2
+] \fits def
+
+#test whether board 1 fits inside board 2 (after rotation)
+[                         #| (x1 y1...) (x2 y2...)
+  [ lpop lpop pop ] dip   #| x1 y1 (x2 y2...)
+  lpop lpop pop           #| x1 y1 x2 y2
+  \le dip swapd le and    #| y1<=x2&&x1<=y2
+] \rfits def
+
+#rotate board size
+[                         #| (x y...)
+  lpop lpop swapd lpush lpush #| (y x...)
+] \board.rotate def
+
+#check whether the x side is the long side of the board
+[
+  lpop lpop pop ge
+] \board.longx def
+
+[
+  dup "x" eq [pop first] [ "y" eq \second [-1 nth] ifelse ] ifelse
+] \board.dim def
+[
+  dup "x" eq [pop third] [ "y" eq \fourth [-1 nth] ifelse ] ifelse
+] \board.dimoff def
+
+#you can redefine canrotate based on your needs (e.g. [pop 1] for always, [pop 0] for never, [third] for the third element of the board object)
+#[ pop 1 ] \canrotate def # always allow rotation
+[ pop 0 ] \canrotate def # never allow rotation
+#[ third ] \canrotate def # use 3rd col of board object to decide whether or not it can be rotated
+
+#test whether req fits in board
+#  - leaves req,board underneath and puts answer on top
+#  - also tests for rotated fit (and rotates the request if allowed and it fits after rotation)
+[
+  dup2 canrotate [
+    \fits sip2 dig2
+    1
+    [ \board.rotate dip \fits sip2 dig2 ]
+    ifelse
+  ] [
+    \fits sip2 dig2
+  ] ifelse
+] \testfit def
+
+[
+  () \cuts.get def
+] \cuts.clear def
+cuts.clear
+
+[
+  [ dup last lpop lpop pop * _ dup2 last 4[lpop popd]times () rpush rpush rpush ] map
+  sort
+  [ last ] map
+] \cuts.sort def
+
+[
+  [ rpush ] \cuts.get mapdef
+] \cuts.rpush def
+
+[ #log entry format: ( "splittype" 0 split (board...) )
+  [() rpush 0 swap rpush rpush rpush cuts.rpush] sip3 pop
+] \cuts.log def #| (board...) split "splittype" -- (board...) split
+
+[ #log entry format: ( "splittype" kerf split (board...) )
+  [() rpush rpush rpush rpush cuts.rpush] 4 sipn pop
+] \cuts.logk def #| (board...) split kerf "splittype" -- (board...) split kerf
+
+[
+  "Cut board %4$v at %1$v=%3$v" printlf #print cut
+  dfirst \dfourth dip #| (log entry...) (board...) "splittype"
+  #now print global offset
+  board.dimoff \dthird dip + \dfirst dip swap #| (log entry...) globaloff "splittype"
+  " (total %v=%v" printf
+  #print kerf if non-zero
+  second dup 0 ne [", kerf=%v" printf] \pop ifelse #print kerf only if !=0
+  ")" print_
+] \cut.print def
+
+[
+  lpop lpop lpop lpop 5 flipn #extract first 4 fields so we can process them in left-to-right order
+  "xlen=%v,ylen=%v,xoff=%v,yoff=%v" printf #print first 4 fields
+  dup empty \pop [",extra=%v" printf] ifelse
+] \board.print def
+[
+  lpop lpop flip3 #extract first 2 fields so we can process them in left-to-right order
+  "xlen=%v,ylen=%v" printf #print first 4 fields
+  dup empty \pop [",extra=%v" printf] ifelse
+] \req.print def
+
+#splits board (x y offx offy...) horizontally (so there is a left/right output)
+[                     #| (x y offx offy...) splitx
+  "x" cuts.log
+  [
+    [
+      swap [swap -] 1 mapnth #subtract splitx from x
+    ] [
+      swap [+] 3 mapnth #add splitx to offx
+    ] bi
+  ] sip2
+  swap [pop] 1 mapnth #set x = splitx
+] \splitx def 
+
+#splits board (x y offx offy...) horizontally (so there is a left/right output) with kerf
+[                     #| (x y offx offy...) splitx kerf
+  "x" cuts.logk
+  bury2
+  [
+    dig2 + #add kerf to splitx
+    [
+      swap [swap -] 1 mapnth #subtract splitx+k from x
+    ] [
+      swap [+] 3 mapnth #add splitx+k to offx
+    ] bi
+  ] sip2
+  swap [pop] 1 mapnth #set x = splitx
+] \splitxk def 
+
+#splits board (x y offx offy...) vertically (so there is a bottom+top output)
+[                     #| (x y offx offy...) splity
+  "y" cuts.log
+  [
+    [
+      swap [swap -] 2 mapnth #subtract splity from y
+    ] [
+      swap [+] 4 mapnth #add splity to offy
+    ] bi
+  ] sip2
+  swap [pop] 2 mapnth #set y = splity
+] \splity def 
+
+#splits board (x y offx offy...) horizontally (so there is a right+left output) with kerf
+[                     #| (x y offx offy...) splity kerf
+  "y" cuts.logk
+  bury2
+  [
+    dig2 + #add kerf to splity
+    [
+      swap [swap -] 2 mapnth #subtract splity+k from y
+    ] [
+      swap [+] 4 mapnth #add splity+k to offy
+    ] bi
+  ] sip2
+  swap [pop] 2 mapnth #set y = splity
+] \splityk def 
+
+#splits board 2 in 3 based on request size 1 (and then pushes 1 if split succeeded, else 0
+# - first splits into top+bottom board, then left+right, with top-left board matching request on top of stack at end
+[                         #|(x1 y1...) (x2 y2 offx2 offy2...)
+  testfit
+  [ [lpop lpop pop] dip swap splity dig2 splitx 1 ] 0 ifelse
+] \trysplit def
+
+#splits board 2 in 3 based on request size 1 with kerf (and then pushes 1 if split succeeded, else 0
+# - first splits into top+bottom board, then left+right, with top-left board matching request on top of stack at end
+[                         #|(x1 y1...) (x2 y2 offx2 offy2...) kerf
+  \testfit dip swap [ #check fit (dip check under kerf)
+    [lpop lpop pop] dip2 #extract x1,y2 and then pop board 1 #| x1 y2 (x2 y2 offx2 offy2...) kerf
+    dup2 board.longx [ #x is the long dimension of the board
+      \swap dip2 #swap x1 and y1
+      swapd dup [splitxk dig2] dip #| (right) (left) y1 kerf
+      splityk #| (right) (top-right) (top-left*) -- top-left is the requested piece
+    ] [ #y is the long dimension of the board
+      swapd dup [splityk dig2] dip #| (bottom) (top) x1 kerf
+      splitxk #| (bottom) (top-right) (top-left*) -- top-left is the requested piece
+    ] ifelse
+    1
+  ] [pop 0] ifelse #else we pop kerf for consistency
+] \trysplitk def
+
+#helper function to add the specified margins to each (x y) pair in the list
+[ swap [ lpop [ dup2 first + ] dip lpop [ dup3 second + ] dip lpush lpush ] map swap pop ] \addmargins def
+#[ swap [ dupd [ [lpop swap] dip + ] map popd ] map popd ] \addmargins def
+
+#[ () bury2 1 [dup2 size and lpop [ ] dip swap ] [ ] while ] \insert def #sorted insert function
+
+[                         #| (boards...) (reqx reqy...) -- fit request into first possible board in list
+  () bury2                # new board list
+  swap                    #| () req (boards...)
+  [
+#vstate
+    dup empty [0 0] [         #| (...) req (board1...)
+      lpop \trysplit dip  #| (...) req board1 1 (...)  OR  (...) board1.a board1.b board1.fit 0 (...)
+      swap
+#vstate
+      [1 0] 1 ifelse # if we are done return 1 from while loop since we won
+    ] ifelse
+  ] [                     #| (...) req board1 (...)
+#vstate
+    swap bury3            #| board1 (...) req (...) 
+    \rpush dip2           #| (... board1) req (...)
+  ] while                 #| (boards) req () 0  OR  (boards.left) board.a board.b board.fit (boards.right) 1
+  [
+    swap [ board.lpush board.lpush cat sort.maxside ] dip #FIXME: don't recalculate area each time
+    1
+  ] [
+    pop 0
+  ] ifelse
+] \fitreq def
+
+[                         #| (boards...) (reqx reqy...) kerf -- fit request into first possible board in list
+  () bury3                # new board list
+  swapd                   #| () req (boards...) kerf
+  [
+    dup2 empty [ #if we have no boards left to try we lost, so break out of while with (boards...),req,0,0 (one zero is for the if statement, the other to return)
+#vstate
+       pop pop 0 0
+    ] [         #| (...) req (board1...) k
+      \lpop dip dup swapd #| (...) req board1 k (...) k
+      \trysplitk dip2  #| (...) req board1 1 (...) k OR  (...) board1.a board1.b board1.fit 0 (...) k
+      dig2                 #| dig trysplit fail
+      [ # we found it and have (boards.l),board1.a,board1.b,board1.fit,(boards.r),k
+        pop
+        swap [ board.lpush board.lpush cat sort.maxside ] dip #FIXME: don't recalculate area each time
+        1 0 #break out of while with (boards...),board.fit
+      ] 1 ifelse  #else we keep looking
+    ] ifelse
+  ] [                     #| (...) req board1 (...) k
+    [swap bury3            #| board1 (...) req (...)
+    \rpush dip2] dip           #| (... board1) req (...) k
+  ] while                 #| (boards),req,0  OR  (boards),fit,1
+] \fitreqk def
+
+[                         #| ( sizes... ) ( boards... ) -- each size should look like (x y...) (only x&y needed), and each board should look like (x y offx offy...) (only first 4 needed)
+  #\board.sortwrap map sort  # sort boards from smallest to largest
+  sort.maxside #FIXME: leave area in place so we don't have to keep recalculating
+  swap rsort.maxside
+  cuts.clear
+  [ () () ] dip #put our cut board and failed requests lists under board list
+  [       # now place each request into a board (from largest to smallest)
+    #vstate
+    #| (boards) (fits) (fails) req
+    bury2 [fitreq] dip2 dig2
+    #vstate
+    [ #| (boards) fit (fits) (fails)
+      \rpush dip
+    ] [ #| (boards) fail (fits) (fails)
+      swapd rpush
+    ] ifelse
+  ] each
+] \fitreqs def
+
+[                         #| ( sizes... ) ( boards... ) kerf -- each size should look like (x y...) (only x&y needed), and each board should look like (x y offx offy...) (only first 4 needed)
+  #\board.sortwrap map sort  # sort boards from smallest to largest
+  [
+    sort.maxside #FIXME: leave area in place so we don't have to keep recalculating
+    swap rsort.maxside
+  ] dip
+  cuts.clear
+  [ () () ] dip2 #put our cut board and failed requests lists under board list
+  swap
+  [       # now place each request into a board (from largest to smallest)
+    dup2 [
+      #| (boards) (fits) (fails) k req
+      bury3 bury2 [fitreqk] dip2 dig2
+      #vstate
+      [ #| (boards) fit (fits) (fails)
+        \rpush dip
+      ] [ #| (boards) fail (fits) (fails)
+        swapd rpush
+      ] ifelse
+    ] dip #save kerf for next loop
+  ] each
+  pop #pop kerf
+] \fitreqsk def
+
+[
+  #list clear
+  #vstate
+  "The following board cuts were produced: " print
+  swap
+  [
+    "  " print_ board.print "\n" print_
+  ] each
+  "The following requests couldn't be fulfilled: " print
+  [
+    "  " print_ req.print "\n" print_
+  ] each
+  "The following boards were left over: " print
+  [
+    "  " print_ board.print "\n" print_
+  ] each
+  "The following cut sequence was used: " print
+  cuts.get
+  cuts.sort
+  [
+    "  " print_ cut.print "\n" print_
+  ] each
+] \printresults def
+
+
+
+#Example usage:
+#quick shell example: ./concat -f board_cuts.cat -e '( (0.5 1) (1 0.5) (1 1) (0.1 0.1) (3 3) (1.1 0.1) (0.5 1) ) ( (1 1 0 0 1) (1 1 0 0 2) (1 1 0 0 3) (1 1.1 0 0 4) ) fitreqs printresults'
+#quick shell example with kerf: ./concat -f board_cuts.cat -e '( (0.5 1) (1 0.5) (1 1) (0.1 0.1) (3 3) (1.1 0.1) (0.5 1) ) ( (1 1 0 0 1) (1 1 0 0 2) (1 1 0 0 3) (1 1.1 0 0 4) ) 0.05 fitreqsk printresults'
+#
+#Code example:
+#  ( (0.5 1) (1 0.5) (1 1) (0.1 0.1) (3 3) (0.5 1) ) #these are the boards we want to make. format: (width height)
+#  #( 0.1 0.1 ) addmargins #add a margin of 0.1,0.1 to the width,height of each board size
+#  ( (1 1 0 0 1) (1 1 0 0 2) (1 1 0 0 3) (1 1 0 0 4) ) #these are our stocked boards. format: (width height xoffset yoffset boardid)
+#  fitreqs #do the fitting (you should get one error for the 3x3 board, but the rest should work)
+#  list #list the results. each result is in form: (width height xoffset yoffset boardid)
+#Another example storing data in files:
+#
+#requests.cat:
+#(
+#(1 1)
+#(1 0.5)
+#(1 1)
+#(0.1 0.1)
+#(3 3)
+#(0.5 1)
+#)
+##(0.1 0.1) addmargins #here is how you can add margins in the data file
+#<EOF>
+#
+#boards.cat:
+#(
+#(1 1 0 0 1)
+#(1 1 0 0 2)
+#(1 1 0 0 3)
+#(1 1 0 0 4)
+#)
+#<EOF>
+#
+#shell command: ./concat -f board_cuts.cat -f requests.cat -f boards.cat -e 'fitreqs'
+#shell command (with margin): ./concat -f board_cuts.cat -f requests.cat -e '(0.1 0.1) addmargins' -f boards.cat -e 'fitreqs list'
+#shell command (with margin): ./concat -f board_cuts.cat -f requests.cat -e '(0.1 0.1) addmargins' -f boards.cat -e 'fitreqs list'

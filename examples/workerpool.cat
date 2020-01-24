@@ -1,0 +1,159 @@
+#Copyright (C) 2020 D. Michael Agun
+#
+#Licensed under the Apache License, Version 2.0 (the "License");
+#you may not use this file except in compliance with the License.
+#You may obtain a copy of the License at
+#
+#http://www.apache.org/licenses/LICENSE-2.0
+#
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+
+#pool of worker threads
+#  - pool.queue queues up work to be run in the next available thread
+#  - pool.eval queues work and returns val which evals to the top-of-stack from work eval (after waiting)
+#  TODO: reduce lock events per q op (e.g. keep q & t outside of ref in outer list, and just pass two refs to thread)
+
+
+[ () ref ] \q.create def
+[ \rpush guard.sig ] \q.push def
+[ \lpush guard.sig ] \q.lpush def
+[ [swap cat] guard.bcast ] \q.cat def
+[ [dup empty] [lpop] guard.waitwhile ] \q.pop def
+
+q.create [
+[
+  q.push
+] lpush \dlog def
+] sip [
+  \print \dlog def
+  ["log finalized" print] \dlog.final def
+  deref \print each
+] lpush \dlog.final def
+
+[ () ref 0 0 () 4 wrapn ref pool.spawn ] \pool.create def #ref(ref(queue) live free (threads))
+[
+  dup [                                   #| ref() (q l f (t))
+    [ wrap \_pool.runner thread] dip #| {thread: ref() <|> _pool.runner} (q l f (t))
+    \rpush 4 mapnth                   #| (q l f (t... {new thread}))
+    \inc 2 mapnth                     #| (q l+1 f (t... {new thread}))
+  ] guard                             #| ref((q) l+1 f (t... {new thread}))
+] \pool.spawn def                     #| ref((q) l f t) -- ref((q) l+1 f (t... {new thread}))
+
+#pops next work item (also updates live/free counters)
+[
+  #add ourselves to free thread counter and grab queue
+  [ dfirst swap \inc 3 mapnth ] guard                #| ref(q) (ref(q) l f+1 t)
+  [q.pop pop] dip #pop next work                     #| wnext (ref(q rest) l f+1 t)
+
+  dup2 0 = [ #kill token (broadcast we got it)       #| 0 (ref(q rest) l f+1 t)
+    [\dec 3 mapnth \dec 2 mapnth] guard.bcast        #| 0 (ref(q rest) l-1 f t)
+
+  ] [ #work to do                                    #| [work] (ref(q rest) l f+1 t)
+    [\dec 3 mapnth] guard                            #| [work] (ref(q rest) l f t)
+  ] ifelse
+] \pool.popwork def
+
+[                               #| ref(q l f t)
+#"hello" dlog
+  [dup 0 ne] [                  #| ref(q l f t)
+    pool.popwork
+    dup2 0 = [         #quit token
+      pop              #finished with thread, pop ref and end loop
+    ] [                         #| [work] ref(ref(q rest) l f (t))
+      [eval clear] dip          #| ref(ref(q rest) l f (t))
+    ] ifelse
+  ] while                       #| 0
+  pop
+] \_pool.runner def
+
+[                                 #| [work] ref(ref(q) l f (t))
+  [dfirst swap] guard [           #| [work] ref(q)  <|>  ref(ref(q) l f (t))
+    q.push pop #add work to q
+  ] dip                           #| ref(ref(q... [work]) l f (t))
+] \pool.queue def                 #( [work] pool -- pool )
+
+[                                 #| [work] ref(ref(q) l f (t))
+  [dfirst swap] guard [           #| [work] ref(q)  <|>  ref(ref(q) l f (t))
+    q.lpush pop #add work to q
+  ] dip                           #| ref(ref([work] q...) l f (t))
+] \pool.lqueue def                #( [work] pool -- pool )
+
+[                                 #| (w...) ref(ref(q) l f (t))
+  [dfirst swap] guard [           #| (w...) ref(q) <|>  ref(ref(q) l f (t))
+    q.cat pop #add work to q
+  ] dip                           #| ref(ref(q... w...) l f (t))
+] \pool.qcat def                  #( (w...) pool -- pool )
+
+
+#make_eval_result - takes work val, returns a pair of quotations (one to eval the work, the other to wait for the result from the work)
+# - like promise+future: packages a task, returning a packaged task for eval (with embedded promise) and future for eval to wait
+# - TODO: version with trycatch to detect/handle work eval exceptions
+[
+  0 ref dup swapd               #| ref(result) work ref(0)
+  \protect dip                  #| ref(result) \work ref(0) 
+  [eval_result] lpush lpush     #| ref(result) [\work ref(0) eval_result]
+  [[wait_result] lpush] dip     #| [ref(result) wait_result] [\work ref(0) eval_result]
+] \make_eval_result def #( work -- [ref(result) wait_result] [\work ref(0) eval_result])
+
+[                               #| [work] ref(0)
+  [ pop                         #| [work]
+    eval collapse               #| (result)
+  ] guard.bcast    #signal done #| ref((result))
+] \eval_result def #( [work] ref(0) -- ref((result)) )
+
+[                               #| ref((result))
+  [dup 0 =] [ #wait until result != 0
+    last 0 #swap result out     #| result 0
+  ] guard.waitwhile pop         #| result
+] \wait_result def              #( ref(0) -- result )
+
+[                                 #| work ref(ref(q) l f (t))
+  [                               #| work  <|>  ref(ref(q) l f (t))
+    make_eval_result              #| [ref(result) wait_result] [\work ref(0) eval_result]
+  ] dip pool.queue                #| [waitresult] ref(ref(q... [evalresult]) l f (t))
+] \pool.eval def                  #( [work] pool -- [waitresult] pool )
+
+[                               #| ref((q) l f (t))
+  #lpushes kill token (kill next thread to pop work)
+  0 swap pool.lqueue
+] \pool.kill1 def
+
+[                               #| ref((q) l f (t))
+  #lpushes kill token (kill next thread to pop work)
+  [dsecond swap] guard [
+    () swap [ 0 swap rpush ] times
+  ] dip pool.qcat
+] \pool.finishthreads def
+
+[
+  pool.finishthreads
+  #swap threadlist out of pool so we can wait on each one (without blocking threads that might be finishing up)
+  [dsecond 0 >] [() 4 swapnth swap] guard.waitwhile
+  [[eval pop] each] dip
+] \pool.final def
+
+[ [dup 0 =] \inc [dup dec] [*] linrec ] \fac def
+[ 7 fac ] \tfunc def
+
+"===create pool===" print
+pool.create
+pool.spawn list
+"===queuing work===" print
+( [1 2 +] [3 4 +] [ 15 fac ] [16 fac] [3 fac] [5 fac] \tfunc )
+[ swap pool.eval swap ] map
+list
+"===evaling results===" print
+[ eval ] map
+list pop
+#"===kill1===" print
+#pool.kill1 list
+"===pool final===" print
+pool.final list
+#"===debug log==="
+#dlog.final
+"===" print
+pop

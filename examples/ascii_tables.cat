@@ -1,0 +1,78 @@
+#Copyright (C) 2020 D. Michael Agun
+#
+#Licensed under the Apache License, Version 2.0 (the "License");
+#you may not use this file except in compliance with the License.
+#You may obtain a copy of the License at
+#
+#http://www.apache.org/licenses/LICENSE-2.0
+#
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+
+#Examples on building tables for output to terminal
+
+
+#uses printf to figure out column spacing for an ascii table, then prints it
+#first lets take a list of first,last names and phone numbers and print that in a table
+#This code will loop through each row twice, once to determine the minimum field widths to line up all rows, the second to actually print
+
+
+[
+  #this loops through each record and updates the minimum field width to find the longest records
+  (0 0 0) dup2 [ swap "%*v%n%*v%-n%*v%-n" printlf2_ popd ] each
+  
+  #get the total number of chars to be printed in each line (for horizontal separators)
+  ( "" "" "" ) swap "| %*1$v %-*2$v | %*3$v |%n" printlf2_ popd rpop swap
+  "" swap ["=" cat] times #build up string of n "=" chars
+  
+  dup print #print the top horizontal separator
+  [
+  #now we print each record using the field widths previously obtained in a table
+  swap [ swap "| %*1$v %-*2$v | %*3$v |\n" printlf2 popd ] each
+  ] dip print #we dip the table under a copy of the "===..." string, and then print the copy at the bottom of the table
+] \print_phonetable def
+
+
+
+#Explanation of field width calculation using printf
+#"%*v%-n%*v%-n%*v%-n" 
+#"%*v%-n" - pop first format argument for min field width, then pop first value arg for conversion, then save how many bytes the printed field would actually be for this record
+#  - %    start of conversion spec
+#  - *    pop+take min field width from first el of format arg list
+#  - v    pop+print first el from argument list (using field width) -- in the case of printf_ nothing is printed, but it tracks the number of bytes that would have been printed
+#  - %-n  push number of bytes since last %n command onto the format arg list
+#    - will be the field width popped by * unless this new value is longer, then it will be the updated min field width
+#    - format args are popped from the left of the format list, but %n conversions are pushed onto the right, so for each record we pop each old field width off the left and push new widths onto the right to get the new list
+#    - the - flag tells %n to use the relative number of bytes since previous %n instead of total number of bytes since the start of the printf
+#
+#Printing using the calculated field widths
+#"| %*1$v %-*2$v | %*3$v |\n"
+#"%*1$v" - copy first format arg to get field width, then pop first value arg and print it
+#"%*2$v" - copy second format arg to get field width, then pop first value arg and print it
+
+
+#Centering text in a string:
+
+[
+  dup2 size - dup 0 ge [ #if string is already shorter than field width, just return it, otherwise we add appropriate right/left padding
+    #value on top of stack is how much padding we need (right+left)
+    #- we add the remainder to the left if padding needed is odd (so string is slightly to the right)
+    [2 / [dup2 size +] sip] sip 2 % + #| "..." len+pad/2 pad/2+(pad%2)
+    #breakdown of above line (to compute left padding and string length + right padding):
+    #
+    "" swap "%-*s%-*s" sprintf #save results to new string (the empty string is so the left-padding has something to print)
+  ] \pop ifelse
+] \center def  #( "..." fieldwidth -- "    ...   " )
+
+#( ("First" "Last" "Phone") ("Joe" "Somebody" "206-555-4139") ("Walter" "Nobody" "509-555-1234") ("Gregg" "Anyone" "909-555-6173") ) print_phonetable
+
+#you could use center like this:
+#"Hello" 10 center #Now we have "   Hello  " on top of the stack
+#"|==========|\n|%s|\n|==========|\n" printf #print "Hello" centered in a box
+
+
+
+

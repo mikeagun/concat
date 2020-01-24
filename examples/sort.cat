@@ -1,0 +1,59 @@
+#Copyright (C) 2020 D. Michael Agun
+#
+#Licensed under the Apache License, Version 2.0 (the "License");
+#you may not use this file except in compliance with the License.
+#You may obtain a copy of the License at
+#
+#http://www.apache.org/licenses/LICENSE-2.0
+#
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+
+#various sorting algorithms (WIP -- just qsort right now)
+
+#quicksort (using first element as pivot)
+[
+  [dup small] #base case is 0/1 elements
+  [] #do nothing for small lists (already sorted)
+  [lpop [dup2 <] filter2] #pivot on first el, and split into <,>= pivot
+  [swapd lpush cat] #insert pivot between sorted left/right side
+  binrec #binary recursion
+] \qsort def
+
+[   #| ... x y [A]
+  \collapse dip3  #| (...) x y [A]
+  dig3 [ eval collapse last ] dip #| last_of(x y A) (...)
+  swap \expand dip
+] \apply2_1 def #apply [A] to the next 2 of stack only, then restore stack under just top of result stack
+
+#quicksort with comparator function
+[
+  [ [dup small] #base case is 0/1 elements
+  [] ] dip #do nothing for small lists (already sorted)
+  #| [dup small] [] [cond]
+  [dup2] rpush \apply2_1 swap rpush #| [dup small] [] [dup2 [cond] apply2_1 ]
+  [ lpop ] rpush  \filter2 swap rpush #| [dup small] [] [ lpop [dup2 [cond] apply2_1] filter2 ]
+  [swapd lpush cat] #insert pivot between sorted left/right side
+  binrec #binary recursion
+] \qsortc def
+
+
+
+
+#merge two sorted lists
+[
+#| (list1) (list2) ()
+() [ dup3 empty dup3 empty or not ] [[dup2 first dup2 first < \swap if lpop swap]dip rpush] while swap cat swap cat
+] \merge def
+
+#merge sort (splits list recursively until small, then merges until we have original list again)
+[
+  [dup small]
+  []
+  [dup size 2 / splitn]
+  [merge]
+  binrec
+] \msort def

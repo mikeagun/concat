@@ -1,0 +1,114 @@
+#Copyright (C) 2020 D. Michael Agun
+#
+#Licensed under the Apache License, Version 2.0 (the "License");
+#you may not use this file except in compliance with the License.
+#You may obtain a copy of the License at
+#
+#http://www.apache.org/licenses/LICENSE-2.0
+#
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+
+# tools for working with csv data (and generally data formatted in lists)
+
+# === CSV Parsing ===
+#
+# - These words are for reading/parsing csv-formatted data
+#
+
+#parserow - parse csv string into list (do this first with csv row string, then use list with remaining functions)
+[                #| line
+  "," split2
+] \parserow def  #| line -- (col1 col2 ...)
+
+#parserows - parse csv string into list -- use this if you have multiple lines of csv in one string
+[                #| lines
+  "\n" split2 [ "," split2 ] map
+] \parserows def  #| lines -- ( (line1 cols) (line2 cols) ...)
+
+#loadrows - read contents of csv-formatted file into list of column lists
+[                #| file
+  () swap        #| () file
+  [              #| () line
+    parserow
+    swap
+    rpush
+  ] eachline     #| ((line1 cols) (line2 cols) ...) file
+  pop
+] \loadrows def  #| file -- ((line1 cols) (line2 cols) ...)
+
+# ====================================================
+
+# === Converting list data to CSV ===
+#
+# - these words convert lists into csv-formated data
+#
+
+#csvrow - convert list to csv string
+[                #| (columns)
+  "," join2
+] \csvrow def  #| (columns) --
+
+#csvrows - convert list of rows to csv string
+[                #| (columns)
+  [ "," join2 ] map "\n" join2
+] \csvrows def  #| (columns) --
+
+# ====================================================
+
+# === Working with rows of data ===
+#
+# - a row of data is simply a list
+# - all of these functions leave the row on the stack, and assume the row is under the other function arguments
+#   - this is designed to be convenient for the case where you are reading, manipulating, then possibly writing rows of data
+# - setnth and mapnth are also useful for working with data rows
+#
+
+#col - dup nth column of row
+[                #| (columns) n
+  \dup dip nth
+] \col def       #| (columns) n -- (columns) coln
+
+#dup nth column of row (if it exists), and put 1/0 on top of stack so we know whether col exists
+[                #| (columns) n
+  dup2 size dup2 #| (columns) n ncols n
+  ge [           #| (columns) n
+    #if n <= ncols, we can grab the el
+    \dup dip nth 1 #| (columns) coln 1
+  ] [            #| (columns) n
+    pop 0        #| (columns) 0
+  ] ifelse
+] \trycol def    #| (columns) n -- (columns) coln bool  ;  (5 6 7) 2 trycol -- (5 6 7) 6 1; (5 6 7) 4 trycol -- (5 6 7) 0
+
+#dup nth column of row if it exists, otherwise use the given default value
+[                #| (columns) n defaultvalue
+  \trycol dip    #| (columns) coln 1 defaultvalue; (columns) 0 defaultvalue
+  swap \pop if   #| (columns) coln; (columns) defaultvalue
+] \trycol2 def   #| (columns) n defaultvalue -- (columns) coln_or_default  ;  (5 6 7) 2 0 trycol2 -- (5 6 7) 6; (5 6 7) 4 trycol2 -- (5 6 7) 0
+
+#check whether column number is <= size of row
+[
+  dup2 size ge   #| (columns) ncols>=n
+] \hascol def    #| (columns) n - ncols>=n
+
+# ====================================================
+
+# === Working with data files ===
+#
+# - these functions assume data is in form ((col1_1 col1_2 ...) (col2_1 col2_2 ...) ...)
+#
+
+
+#load all rows of file into list of column lists
+[                #| file [A]
+  swap [         #| [A] line
+    parserow     #| [A] (columns)
+    swap dup dip #| (columns) A [A]
+  ] eachline
+                 #| (line1 cols) A (line2 cols) A ... [A] file
+  pop pop
+] \eachline.csv def   #| file [A] -- (line1 cols) A (line2 cols) A ...
+

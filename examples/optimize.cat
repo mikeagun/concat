@@ -1,0 +1,55 @@
+#Copyright (C) 2020 D. Michael Agun
+#
+#Licensed under the Apache License, Version 2.0 (the "License");
+#you may not use this file except in compliance with the License.
+#You may obtain a copy of the License at
+#
+#http://www.apache.org/licenses/LICENSE-2.0
+#
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+
+#code optimization library
+# - so far there is code for inlining (and recursive inlining)
+#   - keeps recursion stack to avoid infinite recursion
+# - this is old code and needs to be updated+documented
+
+#[ dup isident [dup defined] 0 ifelse [ dup getdef dup iscode not \swap if pop ] if ] \_resolve def
+#[ dup isident [dup defined] 0 ifelse [ dup getdef dup iscode not [swap pop 1] [pop 0] ifelse ] 0 ifelse ] \_tryresolve def
+#[ \tryresolve [] while ] \resolve def #recursively resolve ident until it is either a simple object or ident with code as definition
+#[ resolve dup iscode [\rresolve map] if ] \rresolve def #recursively resolve idents and quotations
+
+#whether val is an ident and has quotation as definition
+[ dup isident [dup defined [ getdef resolve iscode ] [pop 0] ifelse] [pop 0] ifelse ] \hascodedef def
+
+#test whether list contains val (and leave both under answer) - return 1 if list contains val
+[ dup2 dup2 protect [=] lpush findp 0 ge ] \testhas def
+
+#go through quotation, inlining anything not in ident-list (and adding idents to ident-list before recursive inlining to act as "call-stack" and prevent infinite recursion)
+[ [ resolve dup hascodedef [testhas not [dup [swap lpush] dip getdef resolve _inlinecode [lpop popd] dip] if] [dup iscode \_inlinecode if quote] ifelse ] mmap ] \_inlinecode def
+
+#fully inline expression except for idents in ident-list (and add current ident to list if val is ident)
+[ resolve dup hascodedef [testhas not [dup [swap lpush] dip getdef resolve _inlinecode [lpop popd] dip] if ] [dup iscode \_inlinecode if] ifelse ] \inline_ def
+
+#fully inline an expression (avoiding infinite recursion by maintaining "call-stack")
+[ () swap inline_ popd ] \inline def
+
+#alternate version of inline commands which take additional argument so only the specified idents are inlined
+
+#test whether list1 contains val and list2 does not (leaving all 3 under answer)
+[ dup3 dup2 protect [=] lpush dup \findp dip swap 0 ge [dup3 swap findp 0 < ] [pop 0] ifelse ] \testrec.only def
+
+#go through quotation, inlining anything not in ident-list (and adding idents to ident-list before recursive inlining to act as "call-stack" and prevent infinite recursion)
+[ [ resolve dup hascodedef [testrec.only [dup [swap lpush] dip getdef resolve _inlinecode.only [lpop popd] dip] if] [dup iscode \_inlinecode.only if quote] ifelse ] mmap ] \_inlinecode.only def
+
+#fully inline expression (only idents in ident-list1, except for idents in ident-list2) (and add current ident to list if val is ident)
+[ resolve dup hascodedef [testrec.only [dup [swap lpush] dip getdef resolve _inlinecode.only [lpop popd] dip] if ] [dup iscode \_inlinecode.only if] ifelse ] \inline.only_ def
+
+#fully inline an expression (avoiding infinite recursion by maintaining "call-stack")
+[ () swap inline.only_ popd ] \inline.only def
+
+#recursively replace idents and natives with their unsafe variants where one exists
+[ dup iscode [\unsafe.rec map] \unsafe ifelse ] \unsafe.rec def

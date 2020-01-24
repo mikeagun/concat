@@ -1,0 +1,34 @@
+#Copyright (C) 2020 D. Michael Agun
+#
+#Licensed under the Apache License, Version 2.0 (the "License");
+#you may not use this file except in compliance with the License.
+#You may obtain a copy of the License at
+#
+#http://www.apache.org/licenses/LICENSE-2.0
+#
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+
+#shared object example
+#
+#creates 200 threads to each increment counter inside guard statement
+#  - guards counter during thread creation to maximize contention
+#  - after creating list of threads, it waits for them all to finish, then derefs and prints result
+#
+#Try replacing thread with vm (so they all eval in the current thread) and see how much longer it takes
+
+0 ref dup [ pop wrap            #| (ref())
+  () 200 [                      #| (ref()) (...) 100
+    dup2 (guard \inc) thread    #| (ref()) (...) {thread: ref(counter)  <|>  \inc guard }
+    swap rpush                  #| (ref()) (... {thread: ref(counter)  <|>  \inc guard })
+  ] times
+  popd
+  0
+] guard
+#list #uncomment this to see some intermediate states for the counter (lots of output for 200 threads)
+swap [eval pop] each
+deref print
+list

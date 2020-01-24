@@ -1,0 +1,116 @@
+#Copyright (C) 2020 D. Michael Agun
+#
+#Licensed under the Apache License, Version 2.0 (the "License");
+#you may not use this file except in compliance with the License.
+#You may obtain a copy of the License at
+#
+#http://www.apache.org/licenses/LICENSE-2.0
+#
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+
+#example scripts for doing statistics
+
+#TODO: min2 and max2 should maybe be primitives because they would be cheap on the C side but require quite a bit of concat code
+[               #| A B
+  dup2 dup2 lt  #| A B A<B
+  \swap if      #| if A<B: B A; else: A B
+  pop
+] \max2 def     #| A B -- max(A,B)
+
+[               #| A B
+  dup2 dup2 gt  #| A B A<B
+  \swap if      #| if A<B: B A; else: A B
+  pop
+] \min2 def     #| A B -- max(A,B)
+
+#compute max element of list
+[               #| (list)
+  lpop          #| el (list) --intial max is just first element
+  [             #| max el
+    max2        #| newmax
+  ] each
+] \max def      #| (list) -- max
+
+#compute min element of list
+[               #| (list)
+  lpop          #| el (list) --intial min is just first element
+  [             #| min el
+    min2        #| newmin
+  ] each
+] \min def      #| (list) -- min
+
+#compute range of list using min and max
+#[ dup \max dip min - ] \range1 def
+[              #| (list)
+  dup          #| (list) (list)
+  max swap     #| max (list)
+  min          #| max min
+  -            #| range
+] \range1 def  #| (list) -- range
+
+#alternate definition of range using bi
+[              #| (list)
+  \max \min bi #| max min
+  -            #| range
+] \range2 def  #| (list) -- range
+
+#compute range of list (so max-min) with only one pass through list
+[               #| (list)
+  lpop \dup dip #| el el (list) --initial min and max are both just first el
+  [             #| max min el
+    swap dup2   #| max el min el
+    min2        #| max el newmin
+    \max2 dip   #| newmax newmin
+  ] each        #| max min
+  -             #| range
+] \range def    #| (list) -- range
+
+#compute sum of list
+[               #| (list)
+  0 \+ each     #| sum --starts with zero, then adds each el to current sum
+] \sum def      #| (list) -- sum
+
+#compute mean of list
+[               #| (list)
+  dup size swap #| size (list)
+  0.0 swap      #| size 0.0 (list)
+  \+ each       #| size sum
+  swap /        #| sum/size
+] \mean def     #| (list) -- mean
+
+#compute median of list
+[               #| (list)
+  sort          #| (sorted list)
+  dup size      #| (list) size
+  dup 2 % [     #| (list) oddsize
+    inc 2 / nth #| median     -- (size+1)/2th element of list (median)
+  ] [           #| (list) evensize
+    2 / dup2    #| (list) size/2 (list)
+    dup2 inc    #| (list) size/2 (list) size/2+1
+    nth bury2   #| list[size/2+1] (list) size/2
+    nth + 2.0 / #| (list[size/2+1]+list[size/2])/2.0 -- mean of middle two elements
+  ] ifelse      #| median
+] \median def   #| (list) -- median
+
+
+[               #| (list)
+  dup size swap #| size (list)
+  dup mean swap #| size mean (list)
+  0.0 swap      #| size mean 0.0 (list)
+  #Here is an alternate version of the above 3 lines using tri:
+  #\size \mean 0.0 tri swap #| size mean 0.0 (list)
+  #  - it involves more total computation steps so I don't use it in this library function, but bi/tri are great for saving code in infrequent or one-off computations
+  [             #| size mean acc x
+    dup3 -      #| size mean acc (x-mean)
+    dup * +     #| size mean acc+(x-mean)^2
+  ] each        #| size mean sum((x-mean)^2)
+  swap pop      #| size sum((x-mean)^2)
+  swap dec /    #| sum((x-mean)^2)/(size-1)
+  sqrt          #| stddev
+] \stddev def   #| (list) -- stddev
+
+

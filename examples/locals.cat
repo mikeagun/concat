@@ -1,0 +1,358 @@
+#Copyright (C) 2020 D. Michael Agun
+#
+#Licensed under the Apache License, Version 2.0 (the "License");
+#you may not use this file except in compliance with the License.
+#You may obtain a copy of the License at
+#
+#http://www.apache.org/licenses/LICENSE-2.0
+#
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+
+# various methods for handling named local variables
+#  - effectively pops named locals from stack at start of code to be (re)used throughout code
+
+#simplest locals function -- save locals to local scope before code eval
+# - doesn't modify body, just stores locals before code and wraps whole thing in scope
+# - locals that can be eval'd are eval'd (not just placed on top of stack)
+# - handles nested uses of locals (handled automatically by scoped dictionaries)
+# - caveat - unrelated code called within the body will inherit the definitions of the locals
+#   - with this method must consistently use the names as locals that won't conflict with unrelated code
+[                    #| [body] [locals]
+  [] swap [          #|
+    protect [def] lpush cat
+  ] each
+  dup2 iscode \rappend \rpush ifelse [scope] lpush
+] \locals.def def        #( [body] [locals] -- [ [deflocals body] scope] )
+
+
+#split a list on the element that returns true from the predicate
+[
+  #| (...) [A]
+  0 1 #| (...) [A] n !found
+  [ [ inc dup3 size dup2 ge ] 0 ifelse ] [ # while !found and n <= sizeof(list)
+    #| (...) [A] n
+    [ swapd nth swap eval ] sip3 #| bool (...) [A] n
+    dig3 not #| (...) [A] n !found
+  ] while
+  popd dec splitn #| (lside) (rside)
+] \splitp def
+
+#rfindp: find first predicate match from right to left
+[0 1 [ [ inc dup3 empty [ pop 0 0 ] 1 ifelse ] 0 ifelse ] [ \rpop dip2 dup2 dip3 dig3 not ] while popd popd dec] \rfindp def
+
+
+#dip/sip locals -- dip/sip to hide/restore locals at appropriate points
+#  - agnostic of code since locals are hidden on work stack between references
+#  - locals are placed on top of stack at reference (no eval)
+
+#basic single-variable local using sip/dip
+#  - only supports one local
+#  - no code reordering or stack shuffling, just dip up to first ref then sip to remaining refs
+#  - for back-to-back uses of local optimizes to [dup]
+#  - simple multi-local support can be done by collecting locals into list
+[                                       #| [body] local
+  dup2 iscode [
+    protect [=] lpush                   #| [body] [local =]
+    [splitp dup empty 0 [rest 1] ifelse ] lpush # splitter: #( [body] -- [head] [rest] match )
+    dup dip swap [                      #| [head] [rest] [splitter]
+      # at least one use of local
+      [ dup empty not [[dip] lpush] if ] dip2              #| [ [head] dip ] [rest] [splitter]
+      [                               #| [body] [next] [rest]
+        [ dup empty [pop [dup]] [[sip] lpush] ifelse cat] dip        #| [ body [next] sip ] [rest]
+      ] while                         #| [body] [tail] []
+      pop cat
+    ] [ # else local not used, just pop #| [body] [] [splitter]
+      pop pop [pop] swap cat            #| [pop body]
+    ] ifelse
+  ] [
+    "body must be code object" throw
+  ] ifelse
+] \local def
+
+
+[                                   #| [code]
+  dup empty [
+    pop [dup]                       #| [dup]
+  ] [
+    [sip] lpush                     #| [[code] sip]
+  ] ifelse
+] \sip_code def #( [code] -- [[code] sip] )
+
+[                                   #| [code] n
+  dup 0 le [dup2 empty] unless [    #| [code] n
+    pop                             #| [code]
+  ] [                               #| [code] n
+    [ [dip] [dip2] [dip3] ]       
+    dup2 3 le [ #hardcoded dip    
+      swap nth lpush                #| [ [code] dip ]
+    ] [ pop                         #| [code] n
+      [ dipn ] lpush lpush          #| [ [code] n dipn ]
+    ] ifelse                      
+  ] ifelse                          #| [[code] n dipn]
+] \dipn_code def #( [code] n -- [[code] n dip] )
+
+
+[                                   #| n
+  dup 4 < [ #n < 4
+    [ [pop] [popd] [dig2 pop] [ dig3 pop ] ] #hardcoded pops
+    swap inc nth
+  ] [ #n >= 4
+    [ dign pop ] lpush
+  ] ifelse
+] \popdipn_gen def
+
+[
+  dup2 0 = [ #bury by zero          #| n m
+    pop pop []                      #| []
+  ] [                               #| n m
+    swap                            #| m n
+    dup 3 le [ #hardcoded case
+      [ swap bury2 bury3 ] swap nth
+    ] [ #general case
+      [buryn] lpush
+    ] ifelse
+    swap                            #| [bury] m
+
+    dup 0 = [ #no dip
+      #wrap bare ident in code if no dip
+      pop dup isident [ [] lpush ] if
+    ] [
+      [dup isident \protect if] dip #escape bare ident
+      dup 3 le [
+        [ [dip] [dip2] [dip3] ] swap nth lpush
+        dup [\swap dip] = [pop [swapd]] if #swapd
+      ] [
+        [dipn] lpush lpush
+      ] ifelse
+    ] ifelse
+  ] ifelse
+] \burydipn_gen def #( n m -- [ [n buryn] m dipn ] )
+
+[ [ \expand dipe collapse ] 2 napply ] \list.apply def
+
+[ collapse "#|" print_ dup [ " " print_ print_code_ ] each expand "" print ] \oneline def
+
+[ dup2 clearlist flip3 [ bury2 dup dip2 dup3 iscoll \cat \lpush ifelse dip ] eachr pop ] \mmapr def
+
+#[ #not very efficient currently, but works (and usually it is called for a small number of items)
+#  #| [initial order] [final order]
+#
+#  [] swap [          #| [initial order] [] [final order]
+#    [                #| [leftovers] [shuffle] nextl
+#    ] eachr          #| [] [shuffle]
+#
+#    # after popping unused vars
+#  ] sip              #| [leftovers] [shuffle] [final order]
+#
+#  [                  #| [leftovers] [shuffle] nextl
+#  ] each             #| [] [shuffle]
+#
+#  # after shuffling leftover vars
+# ???                 #| [shuffle]
+#
+#    [] swap          #| [order] [shuffle] [final order]
+#    [                #| [order] [shuffle] next
+#      swap [         #| [order] next
+#        # next val to push to bottom
+#        dupd [=] lpush rfindp
+#      ] dip swap cat #| ... [shuffle newshuffles]
+#    ] eachr
+#
+#] \shufflecode def
+
+
+#basic sip/dip solution
+# - up to one dig,bury,dipn,sip per reference for most complicated cases (plus bury,dip for first reference)
+#   - dig,bury for reordering locals (bury the local we need to the bottom)
+#   - dip/dipn to dip around locals not needed for this reference
+#   - sip the local if we need it again for another reference
+#   - For first reference: dip out to first reference and bury to bottom
+[                                          #| [body] [locals]
+  dup2 iscode dup2 islisttype and [        #| [body] [locals]
+    
+    #fist we check if any locals used
+    dup swapd                              #| [locals] [body] [locals]
+    [[dup2 =] findp popd dup 0 ge 1 [pop 0] ifelse ] lpush  #( el -- locali 1 ) OR ( el -- 0 )
+    [splitp dup empty [pop 0] [rest swapd 1] ifelse ] lpush #splitter: #( [body] -- [head] locali [rest] 1 ) OR ( [body] -- [body] 0 )
+
+    dup dip swap [ #at least one ref       #| [locals] [head] locali [rest] [splitter]
+
+      #split body on local references and track uses of locals
+      [                                    #| [locals] [head] locali
+        dup swapd [                        #| [locals] locali
+          swap [pop 0] map                 #| locali [ 0 0 ... ]
+          (1 1) dig2 inc setnth 2          #| [refs] 1
+        ] dip2                             #| [refs] 1 [head] locali
+      ] dip2 # update ref counter          #| [refs] refn [head] locali [rest] [splitter]
+      () bury3                             #| [refs] refn [head] () locali [rest] [splitter]
+
+      [ dupd [                             #| [refs] refn [head] (body) locali [code] locali_n  <|>  locali_n [rest]
+        inc 4 buryn                        #| [refs] refn locali_n+1 [head] (body) locali [code]
+        wrap2 swap rpush                   #| [refs] refn [head] (body (locali [code]))
+        [                                  #| [refs] refn locali_n+1
+          dup2 inc [                       #| [refs] refn locali_n+1
+            swapd [dup 0 = [pop dup wrap2][swap 2 setnth]ifelse ] swap mapnth # 0 -> (refn refn) OR (first last) -> (first refn)
+          ] dip                            #| [updated refs] refn+1
+        ] dip2                             #| [refs] refn+1 [head] (body ([next] locali_n))
+      ] dip2 ] while                       #| [refs] nrefs+1 [head] (body) locali_t [tail]
+
+      wrap2 swap rpush                     #| [refs] nrefs+1 [head] (body... (locali_t [tail]))
+      \pop dip2                            #| [refs] [head] (body...)
+
+      # now each body element a pair of code and the locali that should be top after that code
+      # tail is the part after the last reference
+      # refs contains pairs of first and last use of the var
+
+      #next we generate code to pop unused locals at start to get initial position of locals on stack
+      #then we dip each var out to where it is first used, then sip between uses
+      #need to track location of each local on stack between sips/dips so we can bury the local to the bottom at the reference point
+
+      [ dup2 [                             #| [refs]  <|>  [head] [refs] (body...)
+        [] swap                            #| [] [refs]
+        #generate initial locals order
+        [ -1 swap [pop inc dup] map ] sip  #| [] nrefs [0 1...] [refs]
+
+        #generate pop code and updated locals
+        swapd [ 0 = [ #ref=0             #| [popcode] [vars] locali
+          #unused local (in reverse order to work down from top of stack)
+          # TODO: optimize pops & initial ordering of locals
+          [                              #| [popcode] [vars] locali  <|>  locali
+            #find local on stack
+            dupd [=] lpush rfindp        #| [popcode] [vars] stackind
+
+            #now generate code to pop ith element of stack
+            popdipn_gen                  #| [popcode] [vars] [popdipn]
+
+            #apply pop code to vars and append to popcode
+            [                            #| [popcode] [vars] [popdipn]  <|>  [popdipn]
+              [                          #| [vars] [popdipn]
+                \expand dipe collapse    #| (updated vars)
+              ] 2 napply                 #| [popcode] (updated vars)
+            ] sip                        #| [popcode] (updated vars) [popdipn]
+            swap \cat dip                #| [popcode popdipn] (updated vars)
+          ] sip                          #| [popcode] (updated vars) locali
+        ] if dec ] eachr                 #| [popcode] [vars] -1
+        inc dig2                         #| [vars] 0 [popcode]
+      ] dip2 ] dip                       #| [vars] 0 [popcode]    [head] [refs] (body...)
+      
+        #now build up the body by shuffle/dip/sip
+        1 bury2                            #| [vars] nvars [init...] [body...] n [refs] (body...)
+        [ dup3 inc dup3                    #| [vars] nvars [init...] [body...] n [refs] (locali [code]) n+1 [refs]
+
+          [                                #| [vars] nvars [init...] [body...] n [refs] (locali [code])  <|>  n+1 [refs]
+            expand dup2 [                  #| [vars] nvars [init...] [body...] n [refs] locali  <|>  [code] locali
+              inc nth expand               #| [vars] nvars [init...] [body...] n first last   
+              dup3 = flip3 =               #| [vars] nvars [init...] [body...] n=last n=first
+            ] dip2                         #| [vars] nvars [init...] [body...] islast isfirst [code] locali
+            dig3 [                         #| [vars] nvars [init...] [body...] isfirst [code] locali  <|>  islast
+              7 dupn swap [=] lpush findp    #| [vars] nvars [init...] [body...] isfirst [code] stacki
+
+              dig2 [ #first use of local     #| [vars] nvars [init...] [body...] [code] stacki
+                bury3                        #| [vars] nvars stacki [init...] [body...] [code]
+                5 dupn                       #| [vars] nvars stacki [init...] [body...] [code] nvars
+                [                            #| [vars] nvars stacki [init...] [body...]
+                  dup empty not [[dip] lpush] if #| [vars] nvars stacki [init...] [[body...] dip]
+                  [                          #| [vars] nvars stacki [init...]
+                    [                        #| [vars] nvars stacki
+                      [dup2 - dup3 size] sip #| [vars] nvars stacki-nvars size stacki
+                      - dec                  #| [vars] nvars stacki-nvars size-stacki-1
+                      burydipn_gen           #| [vars] nvars [burydip]
+                      [
+                        swap inc             #| [vars] [burydip] nvars+1
+                        \list.apply dip      #| [updated vars] nvars+1
+                      ] sip                  #| [updated vars] nvars+1 [burydip]
+                    ] dip swap cat           #| [vars] nvars+1 [init... burydip]
+                  ] dip                      #| [vars] nvars+1 [init...] [[body...] dip]
+                ] dip2                       #| [vars] nvars+1 [init...] [[body...] dip] [code] nvars
+              ] if                           #| [vars] nvars [init...] [body...] [code] stacki
+          
+              [
+                [5 dupn] sip - dec           #| [vars] nvars [init...] [body...] [code] stacki nvars-stacki
+                burydipn_gen                 #| [vars] nvars [init...] [body...] [code] [burydip]
+                swap \cat dip                #| [vars] nvars [init...] [body... burydip] [code]
+              ] sip                          #| [vars] nvars [init...] [body... burydip] [code] stacki
+              [6 dupn size] sip - dec        #| [vars] nvars [init...] [body...] [code] stacki size-stacki-1
+              burydipn_gen                   #| [vars] nvars [init...] [body...] [code] [burydipvars]
+              
+              4 buryn \list.apply 4 dipn     #| [updated vars] nvars [init...] [body...] [code]
+            ] dip                          #| [vars] nvars [init...] [body... burydip] [code] islast
+
+            5 dupn dec [                   #| [vars] nvars [init...] [body... burydip] [code] islast  <|>  nvars-1
+              [ #last use of local         #| [vars] nvars [init...] [body... burydip] [code]
+                [ dec \rest dip ] dip3     #| [vars except last] nvars-1 [init...] [body... burydip] [code]
+              ] [ #else sip for next use   #| [vars] nvars [init...] [body... burydip] [code]
+                sip_code                   #| [vars] nvars [init...] [body... burydip] [[code] sip]
+              ] ifelse
+            ] dip                          #| [vars] nvars [init...] [body... burydip] [code] dipcount
+
+            #dip under all the locals we aren't using next
+            dipn_code                      #| [vars] nvars [init...] [body... burydip] [ [code] dipcount dipn ]
+
+            cat                            #| [vars] nvars [init...] [body... code]
+          ] dip2                           #| ... n+1 [refs]
+        ] each                             #| [vars] nvars [init] [body] nrefs [refs]
+        pop pop                            #| [vars] nvars [init] [body]
+        [ pop pop ] dip2                   #| [init] [body]
+    ] [ # else locals not used, just pop #| nlocals [body] [] [splitter]
+      pop pop [      #| nlocals  <|>  [body]
+        dup size 4 > [ # more than 4 pops so loop (TODO: decide cutoff)
+          size [ \pop times ] lpush #| [ nlocals \pop times ]
+        ] [
+          [pop \pop] map #n pops    #| [ pop... ]
+        ] ifelse # else just [pop pop...]
+      ] dip          #| [init] [body]
+    ] ifelse
+  ] [
+    "Argument type error (body must be code, locals list/code)" throw
+  ] ifelse
+] \locals_ def
+
+[
+  [                        #| (list1) el2
+    [                      #| (list1) el2  <|>  el2
+      protect [=] lpush    #| (list1) [el2 =]
+      dupd findp 0 <       #| (list1) !hasel2
+    ] sip                  #| (list1) !hasel2 el2
+    swap [swap rpush] \pop ifelse #| (updated list1)
+  ] each                   #| (updated list1)
+] \union def
+
+[
+  dup 3 le [ # n<=3
+    [] swap [ \lpush swap lpush ] times
+  ] [ #| n>3
+    [ \lpush times ] lpush
+  ] ifelse
+] \lpushn_gen def
+
+[ #| [code] [locals]
+  swap [ #| [locals] locals] word
+    dup iscode [             #| [locals] [code]
+      swap [                 #| [code] [locals]
+        \rlocals_ sip        #| [init locals] [updated code] [locals]
+        bury2 [              #| [locals] [init locals]  <|>  [updated code]
+          list.apply         #| [code locals]
+          dup size lpushn_gen #| [code locals] [lpushn]
+          swap [
+            [protect] lpush
+          ] mmap             #| [lpushn] [protected locals]
+        ] dip                #| [lpushn] [protected locals] [updated code]
+        swap rpush swap cat  #| [protected locals [updated code] lpushn]
+      ] sip swap         #| [locals] [updated code with locals]
+    ] [                  #| [locals] word
+      quote              #| [locals] [word]
+    ] ifelse
+  ] mmap                 #| [locals] [updated code]
+  swap locals_           #| [init locals] [updated code]
+] \rlocals_ def
+
+[
+  rlocals_ cat
+] \locals def
+
+#TODO: code analysis locals -- analyze code to do minimal stack shuffling and dip/sips to get locals (and stack below locals) in place at right times
+

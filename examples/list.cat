@@ -1,0 +1,357 @@
+#Copyright (C) 2020 D. Michael Agun
+#
+#Licensed under the Apache License, Version 2.0 (the "License");
+#you may not use this file except in compliance with the License.
+#You may obtain a copy of the License at
+#
+#http://www.apache.org/licenses/LICENSE-2.0
+#
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+
+# Library of functions over lists
+# - Some of these are the actual implementations for the concat builtins for various operations (e.g. filter,map,mmap)
+# - For others there are native implementations for efficiency, but these versions could also work
+
+#
+#filter list elements through condition
+[ dup2 clearlist flip3 [ flip3 dup3 flip3 dup dip3 [ dig2 \rpush \popd ifelse] dip ] each pop ] \filter def
+#[                      #| list [cond]
+#  dup2 clearlist flip3 #| [] [cond] list (same type of list as orig)
+#  [                    #| [...] [cond] el
+#    flip3 dup3         #| el [cond] [...] el
+#    flip3 dup          #| el el [...] [cond] [cond]
+#    dip3               #| el cond el [...] [cond]
+#    [                  #| el cond el [...]
+#      dig2             #| el [...] bool
+#      [                #| el [...] -- keep val
+#        rpush          #| [....]
+#      ] [              #| el [...] -- throw val
+#        popd           #| [...]
+#      ] ifelse
+#    ] dip              #| [....] [cond]
+#  ] each               #| newlist [cond]
+#  pop                  #| newlist
+#]                      #| newlist
+#\filter def
+
+##filter list for odd numbers
+#[1 2 3 4 5] [2%] filter
+##filter for numbers <= their index
+#0 [0 3 2 7 4] [dup2 le \inc dip] filter
+#list clear
+
+#filter list elements through condition returning both sets (vals returning true,false)
+[                      #| list [cond]
+  [ dup clearlist dup flip3 ] dip swap #| [] [] [cond] [list]
+  [                    #| [...] [...] [cond] el
+    bury3 \dup dip3    #| el el [...] [...] [cond]
+    dup 4 dipn 4 dign  #| el [...] [...] [cond] bool
+    [
+      \rpush dip2
+    ] [
+      [ swapd rpush ] dip
+    ] ifelse
+  ] each               #| [...] [...] [cond]
+  pop                  #| [...] [...]
+]                      #| (matches) (!matches)
+\filter2 def
+
+#run function on each element of list (producing new list with same number of elements)
+[ dup2 clearlist flip3 [ bury2 dup dip2 \rpush dip ] each pop ] \map def
+#[               #| (list) [code] -- (newlist)
+#  dup2 clearlist#| (list) [code] ()
+#  flip3         #| () [code] (list)
+#  [             #| (...) [code] el
+#    bury2       #| el (...) [code]
+#    dup         #| el (...) [code] [code]
+#    dip2        #| el code (...) [code]
+#    \rpush dip  #| (... newel) [code]
+#  ] each        #| (newlist) [code]
+#  pop           #| (newlist)
+#] \map def      #| (newlist)
+
+##increment each item in list
+#[1 2 3 4 5] [inc] map
+##subtract each element from the previous one
+#0 [1 2 3 4 5] [dup dig2 -] map
+##0 [1 2 3 4 5] [  #| prev el
+##  dup dig2       #| el el prev
+##  -              #| el diff
+##] map            #| last [diff01 diff12 ...]
+#list clear
+
+#
+[ swapd each ] \reduce def #| (a b c d) init [body] -- init a body b body c body
+
+#run function on each element of list, and then append result to new list
+#since list results are concatenated, can produce zero or more elements in new list for each el of old list
+[ dup2 clearlist flip3 [ bury2 dup dip2 \rappend dip ] each pop ] \mmap def
+#[                       #| list func
+#  dup2 clearlist        #| list func [] (same list type)
+#  flip3                 #| [] func list
+#  [                     #| [...] [code] el
+#    bury2               #| el [...] [code]
+#    dup                 #| el [...] [code] [code]
+#    dip2                #| el code [...] [code]
+#    \rappend dip        #| (... newels) [code]
+#  ] each                #| (newlist) [code]
+#  pop                   #| newlist
+#]                       #| newlist
+#\mmap def
+
+#[ dup2 clearlist flip3 [ bury2 dup dip2 dup3 iscoll \cat \lpush ifelse dip ] eachr pop ] \mmapr def
+[                       #| list func
+  dup2 clearlist        #| list func [] (same list type)
+  flip3                 #| [] func list
+  [                     #| [...] [code] el
+    bury2               #| el [...] [code]
+    dup                 #| el [...] [code] [code]
+    dip2                #| el code [...] [code]
+    dup3 iscoll 
+      \cat              #| [newels ...] [code]
+      \lpush            #| [newel ...] [code]
+    ifelse              #| newel [...] [code] \lpush OR [newels] [...] [code] \cat
+    dip
+  ] eachr               #| (newlist) [code]
+  pop                   #| newlist
+]                       #| newlist
+\mmapr def
+
+##duplicates each element of list
+#(1 2 3) [dup () lpush lpush] mmap print
+##duplicates the odd numbers in the list, and drop the even numbers
+#(1 2 3) [dup 2 % [dup () lpush lpush] [pop ()] ifelse] mmap
+#list clear
+
+#apply each function to value, producing list of same length
+[ dup clearlist swap [ swap [sip swap] dip rpush ] each swap pop ] \cleave def
+#[                      #| val funclist
+#  dup clearlist swap   #| val [] funclist (same list type)
+#  [                    #| val [...] func
+#    swap               #| val func [...]
+#    [sip swap] dip     #| val el [...]
+#    rpush              #| val [....]
+#  ] each               #| val newlist
+#  swap pop             #| newlist
+#]                      #| newlist
+#\cleave def
+
+
+#apply each function to a value from the stack, producing list of same length
+[ dup clearlist swap dup size swap [ dup2 inc dipn dup inc dign dig2 rpush swap dec ] each pop ] \spread def
+#[                           #| ... funclist
+#  dup clearlist swap        #| ... () funclist
+#  dup size swap             #| ... () n funclist
+#  [                         #| x ... (...) n [Func]
+#    dup2                    #| x ... (...) n [Func] n
+#    inc dipn                #| xFunc ... (...) n
+#    dup inc dign            #| ... (...) n xFunc
+#    dig2 rpush swap         #| ... (....) n
+#    dec                     #| ... (....) n-1
+#  ] each                    #| resultlist 0
+#  pop                       #| resultlist
+#]                           #| resultlist
+#\spread def
+
+
+#each variant, where a counter (from 0) is placed above each list element
+[ 0 dig2 [flip3 dup2 dup2 dip2 inc] each pop pop ] \eachi def
+#[                            #| list [body]
+#  0 dig2                     #| [body] 0 list
+#  [                          #| [body] i el
+#    flip3 dup2 dup2          #| el i [body] i [body]
+#    dip2 inc                 #| el i body [body] i+1
+#  ] each                     #| el0 0 body el1 1 body ... [body] n
+#  pop pop
+#] \eachi def
+
+
+
+#times loop
+[                 #| n [A]
+  [               #| n [A] [L]
+    dup3 0 >      #| n [A] [L] n>0
+    [             #| n [A] [L]
+      [           #| n [A]
+         \dec dip #| n-1 [A]
+         dup      #| n-1 [A] [A]
+         dip2     #| A n-1 [A]
+      ] dip       #| A n-1 [A] [L]
+      dup eval    #| A n-1 [A] [L] L
+    ] if 
+  ]               #| n [A] [L]
+  dup eval        #| n [A] [L] L
+                  #| A A ... 0 [A] [L]
+  pop pop pop     #| A A ...
+] \times def
+
+#times loop (with diff even/odd iterations)
+[                   #| n [A]
+  dup2 0 > [        #| n [A] n>0
+    [               #| n [A] [Odd] [Even] -- odd loop
+      [             #| n [A]
+         \dec dip   #| n-1 [A]
+         dup        #| n-1 [A] [A]
+         dip2       #| A n-1 [A]
+      ] dip2        #| A n-1 [A] [Odd] [Even]
+      4 dupn [      #| A n-1 [A] [Odd] [Even] -- if n-1 != 0
+        dup eval    #| A n-1 [A] [Odd] [Even] Even
+      ] if
+    ]
+    [               #| n [A] [Odd] [Even] -- even loop
+      [             #| n [A]
+         \dec       #| n-1 [A]
+         dup        #| n-1 [A] [A]
+         dip2       #| A n-1 [A]
+      ] dip2        #| A n-1 [A] [Odd] [Even]
+      dup2 eval     #| A n-1 [A] [Odd] [Even] Odd
+    ]
+    4 dupn 2 % inc  #| n [A] [Odd] [Even] n%2+1
+    dupn            #| n [A] [Odd] [Even] [X] -- puts correct iteration on top
+    eval            #| n [A] [Odd] [Even] X -- now we run until finished
+                    #| A A ... 0 [A] [Odd] [Even]
+    pop pop         #| A A ... 0 [A]
+  ] if              #| A A ... 0 [A]
+  pop pop           #| A A ...
+] \times_1 def
+
+#each loop
+[                 #| (list) [A]
+  [               #| (list) [A] [L]
+    dup3 size     #| (list) [A] [L] n
+    [             #| (el ...) [A] [L]
+      [           #| (el ...) [A]
+        \lpop dip #| el (...) [A]
+        dup dip2  #| el A (...) [A]
+      ] dip       #| el A (...) [A] [L]
+      dup eval    #| el A (...) [A] [L] L
+    ] if
+  ]               #| (list) [A] [L]
+  dup eval        #| (list) [A] [L] L
+  pop pop pop
+] \each def
+
+#reversed each loop
+[                 #| (list) [A]
+  [               #| (list) [A] [L]
+    dup3 size     #| (list) [A] [L] n
+    [             #| (el ...) [A] [L]
+      [           #| (el ...) [A]
+        \rpop dip #| el (...) [A]
+        dup dip2  #| el A (...) [A]
+      ] dip       #| el A (...) [A] [L]
+      dup eval    #| el A (...) [A] [L] L
+    ] if
+  ]               #| (list) [A] [L]
+  dup eval        #| (list) [A] [L] L
+  pop pop pop
+] \eachr def
+
+#while loop
+[                 #| [C] [A]
+  [               #| [C] [A] [L]
+    dup3 dip3     #| C [C] [A] [L]
+    dig3          #| [C] [A] [L] C
+    [             #| [C] [A] [L] -- C was true
+      [           #| [C] [A]
+        dup dip2  #| A [C] [A]
+      ] dip       #| A [C] [A] [L]
+      dup eval    #| A [C] [A] [L] L
+    ] if
+  ]               #| [C] [A] [L]
+  dup eval        #| [C] [A] [L] L
+  pop pop pop
+] \while def
+
+#split a list on the element that returns true from the predicate
+[
+  #| (...) [A]
+  0 1 #| (...) [A] n !found
+  [ [ inc dup3 size dup2 ge ] 0 ifelse ] [ # while !found and n <= sizeof(list)
+    #| (...) [A] n
+    [ swapd nth swap eval ] sip3 #| bool (...) [A] n
+    dig3 not #| (...) [A] n !found
+  ] while
+  popd dec splitn #| (lside) (rside)
+] \splitp def
+
+#find n for first element of list that returns true from predicate
+[
+  #| (...) [A]
+  0 1 #| (...) [A] n !found
+  [ [ inc dup3 empty [pop 0 0] 1 ifelse ] 0 ifelse ] [ # while !found and !empty (and if empty replace index with zero so it goes to -1 below)
+    #| (...) [A] n
+    \lpop dip2 dup2 dip3 #| found (...) [A] n
+    dig3 not             #| (...) [A] n !found
+  ] while
+  popd popd dec
+] \findp1 def
+
+#findp implemented from dup-eval recursion
+[
+  #| (...) [A]
+  0 1 #| (...) [A] n !found
+  [               #| (...) [A] n !found [L]
+    # while !found and !empty (and if empty replace index with zero so it goes to -1 below)
+    [[inc dup3 empty [pop 0 0] 1 ifelse] 0 ifelse] dip swap
+                  #| (...) [A] n [L] (!found&&!empty)
+    [             #| (...) [A] n [L]
+      \lpop dip3 dup3 4 dipn #| found (...) [A] n [L]
+      4 dign not             #| (...) [A] n [L] !found
+      swap dup eval    #| recurse
+    ] if
+  ]               #| [L]
+  dup eval        #| [L] L
+  pop [pop pop] dip
+  dec
+] \findp def
+
+
+[
+  #| (...) [A]
+  [               #| (...) [A] [L]
+    dup3 empty    #| (...) [A] [L] list_not_empty
+    0 [           #| (el ...) [A] [L]
+      \lpop dip2 dup2 dip3 #| elA (...) [A] [L]
+      dig3 1 [dup eval] ifelse   #| either return 1 or recurse again
+    ] ifelse
+  ]               #| [L]
+  dup eval        #| [L] L
+  [pop pop pop] dip
+] \some def #whether at least one element of list passes condition
+
+[
+  #| (...) [A]
+  [               #| (...) [A] [L]
+    dup3 empty    #| (...) [A] [L] list_not_empty
+    1 [           #| (el ...) [A] [L]
+      \lpop dip2 dup2 dip3 #| elA (...) [A] [L]
+      dig3 [dup eval] 0 ifelse   #| either return 1 or recurse again
+    ] ifelse
+  ]               #| [L]
+  dup eval        #| [L] L
+  [pop pop pop] dip
+] \all def #whether all elements of list pass condition
+
+
+[                 #| (l1) (l2) [A]
+  [               #| (l1) (l2) [L]
+  ] dup eval      #| (list)
+#  [               #| (list) [A] [L]
+#    dup3 size     #| (list) [A] [L] n
+#    [             #| (el ...) [A] [L]
+#      [           #| (el ...) [A]
+#        \lpop dip #| el (...) [A]
+#        dup dip2  #| el A (...) [A]
+#      ] dip       #| el A (...) [A] [L]
+#      dup eval    #| el A (...) [A] [L] L
+#    ] if
+#  ]               #| (list) [A] [L]
+#  dup eval        #| (list) [A] [L] L
+#  pop pop pop
+  
+] \zipwith def #combine two lists into one using given val

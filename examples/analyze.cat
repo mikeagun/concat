@@ -1,0 +1,815 @@
+#Copyright (C) 2020 D. Michael Agun
+#
+#Licensed under the Apache License, Version 2.0 (the "License");
+#you may not use this file except in compliance with the License.
+#You may obtain a copy of the License at
+#
+#http://www.apache.org/licenses/LICENSE-2.0
+#
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+
+#tools for code analysis
+#
+#arity = get arity of quotation or val. only works when all used words/natives have known and fixed arities, otherwise returns (-1 -1)
+
+[ # TODO: compile this info into the executable somehow (probably along with function that defines op)
+  ([A B] [C]) \+ def
+  ([A B] [C]) \- def
+  ([A B] [C]) \* def
+  ([A B] [C]) \/ def
+  ([A B] [C]) \= def
+  ([A B] [C]) \> def
+  ([A B] [C]) \< def
+  ([A B] [C]) \and def
+  ([A B] [C]) \or def
+  ([A] []) \print def
+  ([A B] [B A]) \swap def
+  ([A] [A A]) \dup def
+  ([A B] [A B A]) \dup2 def
+] savescope
+dup
+[
+  ["%v" sprintf] dip #get just name part from native/ident (using "%v")
+  dup2 hhas [
+    swap hget popd
+  ] [
+    pop pop ([...] [...])
+  ] ifelse
+] lpush \effects.native def #({hash} A -- {hash} ([in state] [out state]); ({hash} A -- {hash} ([...] [...])) arity for natives
+
+[
+  ["%v" sprintf] dip #get just name part from native/ident (using "%v")
+  dup2 hhas [
+    swap hget popd
+    [ dup size swap [\... =] findp 0 ge [pop -1] if] map
+  ] [
+    pop pop (-1 -1)
+  ] ifelse
+] lpush \arity.native def #({hash} A -- {hash} (takes gives)); ({hash} A -- {hash} (-1 -1))  arity for known natives
+
+[
+  [0 0] dip #|min cur [code]
+  [
+    _arity
+    dup lpop lpop pop #| min cur (takes gives) takes gives
+    0 < swap 0 < or #| min cur (takes gives) takes<0||gives<0
+    [
+      pop pop pop 1 0 1
+    ] [
+      lpop [
+        - #|oldmin oldcur-takes
+        dup [swapgt pop] dip #|min oldcur-takes
+      ] dip
+      lpop pop + #|min oldcur-takes+gives
+      0 #keep looping
+    ] ifelse
+  ] findp #we use findp as a control structure here
+  pop # pop result from findp (we don't actually care about the index)
+  dup2 - #| min final-min
+  \_ dip #| takes gives
+  () lpush lpush
+] \_arity.code def
+
+[
+  rresolve
+  dup ispush dup2 iscode or [
+    pop (0 1)
+  ] [
+    dup isnative [
+      arity.native
+    ] [
+      dup isident [
+        dup \defined dip swap [
+          getdef
+          dup iscode [
+            _arity.code
+          ] [
+            pop (-1 -1) #whoops, this is a case we don't handle (not push, not native, not ident resolving to code)
+          ] ifelse
+        ] [
+          pop (-1 -1) #ident not found
+        ] ifelse
+      ] [
+        pop (-1 -1) #not push type,native, or code
+      ] ifelse
+    ] ifelse
+  ] ifelse
+] \_arity def
+
+[
+  dup iscode [
+    _arity.code
+  ] [
+    _arity
+  ] ifelse
+] \arity def
+
+
+
+[ #TODO: build this in
+  [       isint isfloat isstring islist isident iscode isnative ishash isfile ] [sip swap] findp
+  popd #pop arg
+  ( "Val" "Int" "Float" "String" "List" "Ident" "Code" "Native" "Hash" "File" )
+  swap 2+ nth
+] \type.get def
+
+[ #TODO: build this in
+  dup2 dup2 = dup2 "Val" = or
+  [ #if types match exactly or the type we are checking against is "Val" we are done
+    pop pop 1
+  ] [
+    swap
+    (
+      ("Val")
+      ("Int"    "Num" "Pushable")
+      ("Float"  "Num" "Pushable")
+      ("String" "StringType" "Coll" "Pushable")
+      ("List" "ListType" "Coll" "Pushable")
+      ("Ident" "StringType")
+      ("Code" "ListType" "Coll")
+      ("Native")
+      ("Hash" "Pushable")
+      ("File")
+    ) [ lpop [dup2 =] dip swap [popd 1] [pop 0] ifelse ] findp
+    0 > [
+      [ dup2 = ] findp popd 0 ge
+    ] [
+      pop pop 0
+    ] ifelse
+  ] ifelse
+] \type.isa def
+
+[
+  swap type.isa
+] \type.couldbe def
+
+[ \lpop dip dip lpush ] \mapfirst def
+[ 2 mapnth ] \mapsecond def
+[ 3 mapnth ] \mapthird def
+[ 4 mapnth ] \mapfourth def
+[ 5 mapnth ] \mapfifth def
+[ \rpop dip dip rpush ] \maplast def
+
+
+
+
+
+[
+  [small] \isgeneric def
+  [dup small [pop 0] [second "lit"=] ifelse] \islit def
+  [dup small] \testgeneric def
+  [dup small 0 [dsecond "lit"=] ifelse] \testlit def
+
+  [ dup small [pop 0] [second "arg" =] ifelse ] \Val.isarg def
+  [ ("Val" "") ref ("Val" "arg") rpush ] \Arg def
+  [ [ [[pop] mapsecond] guard ] mapthird ] \Arg.setname def
+  [ [ [[dup] mapsecond] guard ] mapthird ] \Arg.getname def
+  [ third deref second ] \Arg.name def
+  
+  [ \first dip type.isa ] \Val.isa def
+  [ swap first type.isa ] \Val.couldbe def
+  ["List" Val.isa] \Val.islist def
+  ["Code" Val.isa] \Val.iscode def
+  ["Int" Val.isa] \Val.isint def
+  ["print" apply "" print] \Val.print def
+  [ swap "map-df" apply ] \Val.map-df def
+  [ swap "map-lr" apply ] \Val.map-lr def
+
+  [2dup Val.isa [pop] [ 2dup Val.couldbe [dup2 Val.isarg [Arg.coerce_] [Val.coerce_] ifelse ] [ "Failed Type Coersion" throw ] ifelse ] ifelse] \Val.coerce def
+  [ tostring "-coerce" cat toident eval ] \Val.coerce_ def
+  [ tostring "-arg-coerce" cat toident eval ] \Arg.coerce_ def
+  [ dthird deref first \dfirst dip ne [dthird deref first Arg.coerce_] if ] \Arg.retype def #try to retype arg if the shared obj has been updated
+
+  [dup "Int" Val.isa] \Val.testint def
+  [dup Val.isint [dup2 Val.isint] only] \Val.2testint def
+
+  
+  [dup "Pushable" Val.isa] \Val.testpush def
+  [dup "Code" Val.isa] \Val.testcode def
+  [dup "Ident" Val.isa] \Val.testident def
+  [dup "Native" Val.isa] \Val.testnative def
+  [dup "List" Val.isa] \Val.testlist def
+  [dup "Coll" Val.isa] \Val.testcoll def
+
+  [ Val.testint [ testlit [ third ] [pop 0] ifelse ] [pop 0] ifelse ] \Val.definitely_true def
+  [ Val.testint [ testlit [ third not ] [pop 0] ifelse ] [pop 0] ifelse ] \Val.definitely_false def
+  [ Val.definitely_true not ] \Val.maybe_false def
+
+  ("Val") \Val def
+  [ first print_ ] \Val-print def
+  [ first print_ ] \Val-print_ def
+  [ swap eval ] dup \Val-map-df def \Val-map-lr def
+  
+  [ Arg.retype dfirst "Val" = [third deref dsecond empty [first print_] [second print_] ifelse] ["print" apply] ifelse ] \Val-arg-print def
+  [ Arg.retype dfirst "Val" = [third deref dsecond empty [first print_] [second print_] ifelse] ["print_" apply] ifelse ] \Val-arg-print_ def
+  [ Arg.retype dfirst "Val" = [swap eval] ["map-df" apply] ifelse ] \Val-arg-map-df def
+  [ Arg.retype dfirst "Val" = [swap eval] ["map-lr" apply] ifelse ] \Val-arg-map-lr def
+
+#Abstract integers
+  ("Int") \Int def
+  ("Int" "bool") \Bool def
+  ("Int" "lit" 1) \True def
+  ("Int" "lit" 0) \False def
+  [ Int ("Int" "") rpush ref ("Int" "arg") rpush ] \Int.Arg def
+  [ Int.Arg Arg.setname ] \Int.arg def
+  [ ("Int" "lit") rpush ] \Int.lit def
+  [ ("Int" "floor") rpush ] \Int.floor def
+  [ ("Int" "ceil") rpush ] \Int.ceil def
+  [ swap ("Int" "range") rpush rpush ] \Int.range def
+  #[ dup 0 = [pop ("Int" "sign" 0)][0 > ("Int" "sign" +) ("Int" "sign" -) ifelse] ifelse ] \Int.sign def
+
+  [ testlit [ third ] [pop 0] ifelse ] \Int.definitely_true def
+  [ testlit [ third not ] [pop 0] ifelse ] \Int.definitely_false def
+  [ Int.definitely_true not ] \Int.maybe_false def
+
+  [ Val.testint not [ "Failed Type Assert" throw ] if ] \Int.assert def
+  ["Int" Val.coerce] \Int.coerce def #TODO: handle Float coersion
+  [Int.coerce [Int.coerce] dip] \Int.2coerce def
+  [Int.assert [Int.assert] dip] \Int.2assert def
+
+  [dup small [pop 0] [second "floor"=] ifelse] \Int.isfloor def
+  [dup small [pop 0] [second "ceil"=] ifelse] \Int.isceil def
+  [dup small [pop 0] [second "range"=] ifelse] \Int.isrange def
+  [dup small [pop 0] [second "off"=] ifelse] \Int.isoff def
+  [dup small [pop 0] [second "scale"=] ifelse] \Int.isscale def
+  [dup small [pop 0] [second "div"=] ifelse] \Int.isdivide def
+  [dup small [pop 0] [second \+ =] ifelse] \Int.isadd def
+  [dup small [pop 0] [second \* =] ifelse] \Int.ismul def
+  [dup small [pop 0] [second \/ =] ifelse] \Int.isdiv def
+  [dup small [pop 0] [second \_ =] ifelse] \Int.isneg def
+
+  [dup small 0 [dsecond "floor"=] ifelse] \Int.testfloor def
+  [dup small 0 [dsecond "ceil"=] ifelse] \Int.testceil def
+  [dup small 0 [dsecond "range"=] ifelse] \Int.testrange def
+  [dup small 0 [dsecond "off"=] ifelse] \Int.testoff def
+  [dup small 0 [dsecond "scale"=] ifelse] \Int.testscale def
+  [dup small 0 [dsecond "div"=] ifelse] \Int.testdivide def
+  [dup small 0 [dsecond \+ =] ifelse] \Int.testadd def
+  [dup small 0 [dsecond \* =] ifelse] \Int.testmul def
+  [dup small 0 [dsecond \/ =] ifelse] \Int.testdiv def
+  [dup small 0 [dsecond \_ =] ifelse] \Int.testneg def
+
+
+  [dup small [pop 0] [second "off"=] ifelse] \Int.islitoff def
+  [dup small [pop 0] [second "scale"=] ifelse] \Int.testlitscale def
+  [dup small [pop 0] [second "divide"=] ifelse] \Int.testlitdivide def
+  [dup small [dsecond "off"=] unless] \Int.testlitoff def
+  [dup small [dsecond "scale"=] unless] \Int.testlitscale def
+  [dup small [dsecond "divide"=] unless] \Int.testlitdivide def
+
+  [ "add" apply ] \Int.add def
+  [ "bool" apply ] \Int.bool def
+
+  [ testgeneric [popd] [dup2 0 = [popd] [Int.testlitoff [ \+ mapthird ] [swap ("Int" "off") rpush rpush] ifelse ] ifelse] ifelse] \Int.off def
+  [ dup2 0 = [pop pop ("Int" "lit" 0)] [testgeneric [popd] [Int.testlitscale [ \* mapthird ] [swap dup 1 = [pop][("Int" "scale") rpush rpush]ifelse] ifelse] ifelse] ifelse] \Int.scale def
+  [ dup2 0 = ["Divide by Zero"  throw] [testgeneric [popd] [testlit [\/ mapthird] [Int.testdivide [ \* mapthird ] [swap dup 1 = [pop][("Int" "div") rpush rpush]ifelse] ifelse] ifelse] ifelse] ifelse] \Int.divide def
+  [ swap ("Int" +) rpush rpush ] \Int.sum def
+  [ swap ("Int" *) rpush rpush ] \Int.mul def
+  [ swap small [popd] [ [ dsecond int ] [("Int" /) rpush rpush] ifelse] ifelse ] \Int.div def
+  [ testgeneric not [ Int.testneg [ third ] [Int.testlitscale [ \_ mapthird ] [ ("Int" _) rpush ] ifelse] ifelse ] if ] \Int.neg def
+  [ 1 swap "off" apply ] \Int.inc def
+  [ -1 swap "off" apply ] \Int.dec def
+
+  [ dfirst dup "Int" type.isa [pop] ["Int" type.couldbe [pop Int] ["Failed Type Coersion" throw] ifelse] ifelse ] \Int-coerce def
+  [ first print_ ] \Int-print def
+  [ first print_ ] \Int-print_ def
+  [ swap eval ] dup \Int-map-df def \Int-map-lr def
+  [ ] \Int-inc def
+  [ ] \Int-dec def
+  [ popd ] \Int-off def
+  [ popd ] \Int-add def
+  [ popd ] \Int-sub def
+  [ popd ] \Int-mul def
+  [ popd ] \Int-div def
+  [ ] \Int-neg def
+  [ pop Bool ] \Int-bool def
+
+  ( "bool-" "arg-" "lit-" "floor-" "ceil-" "range-" "sign-" "off-" "scale-" "div-" "+" "*" "/" "_" ) [
+    "Int-" rpush
+    [ swap eval ] dup2 "map-df" cat toident def
+    [ swap eval ] dup2 "map-lr" cat toident def
+    [ Int.inc ] dup2 "inc" cat toident def
+    [ Int.dec ] dup2 "dec" cat toident def
+    [ Int.off ] dup2 "off" cat toident def
+    [ Int.scale ] dup2 "scale" cat toident def
+    [ Int.divide ] dup2 "divide" cat toident def
+    [ Int.sum ] dup2 "add" cat toident def
+    [ Int.neg Int.sum ] dup2 "sub" cat toident def
+    [ Int.mul ] dup2 "mul" cat toident def
+    [ Int.div ] dup2 "div" cat toident def
+    [ pop Bool ] dup2 "bool" cat toident def
+    [
+      dup2 Int.definitely_false [ dup Int.definitely_false ] or [ pop pop False ] [
+        dup2 Int.definitely_true [ dup Int.definitely_true ] and [ pop pop True ] [
+          Bool
+        ] ifelse
+      ] ifelse
+    ] dup2 "and" cat toident def
+    [
+      dup2 Int.definitely_true [ dup Int.definitely_true ] or [ pop pop True ] [
+        dup2 Int.definitely_false [ dup Int.definitely_false ] and [ pop pop False ] [
+          Bool
+        ] ifelse
+      ] ifelse
+    ] dup2 "or" cat toident def
+    [ dup Int.definitely_true [ False ] [ dup Int.definitely_false [ True ] [ Bool ] ifelse ] ifelse ] dup2 "not" cat toident def
+    pop
+  ] each
+
+
+  [ dthird deref first dup "Int" type.isa [swap rest lpush] ["Val" = ["Int" swap rest lpush [["Int" swap rest lpush Int swap rpush] guard] mapthird] ["Failed Type Coersion" throw] ifelse] ifelse ] \Int-arg-coerce def
+
+  [ third deref dsecond empty not [ dsecond print_ ":" print_ ] if third "print" apply ] \Int-arg-print def
+  [ third deref dsecond empty not [ dsecond print_ ":" print_ ] if third "print_" apply ] \Int-arg-print_ def
+
+  [ third print_ ] \Int-lit-print def
+  [ third print_ ] \Int-lit-print_ def
+  [ [inc] maplast ] \Int-lit-inc def
+  [ [dec] maplast ] \Int-lit-dec def
+  [ [+] maplast ] \Int-lit-off def
+  [ [*] maplast ] \Int-lit-scale def
+  [ [/] maplast ] \Int-lit-divide def
+  [ swap testlit [ last swap [+] maplast ] [\last dip "off" apply ] ifelse ] \Int-lit-add def
+  [ swap testlit [ last swap [-] maplast ] [[last _] dip "off" apply ] ifelse ] \Int-lit-sub def
+  [ swap testlit [ last swap [*] maplast ] [\last dip Int.scale] ifelse ] \Int-lit-mul def
+  [ swap testlit [ last swap [/] maplast ] [\last dip Int.divide] ifelse ] \Int-lit-div def
+  [ [_] maplast ] \Int-lit-neg def
+  [ [bool] mapthird ] \Int-lit-bool def
+            
+  [ rest rest lpop first "print" apply " " print_ print_ " +" print_ ] \Int-off-print def
+  [ "{" print_ rest rest lpop first "print" apply " " print_ print_ " +" print_ "}" print_ ] \Int-off-print_ def
+  [ dup2 [["map-df" apply] mapfourth] dip eval ] \Int-off-map-df def
+  [ dup2 [["map-lr" apply] mapfourth] dip eval ] \Int-off-map-lr def
+  [ [inc] mapthird ] \Int-off-inc def
+  [ [dec] mapthird ] \Int-off-dec def
+  [ [+] mapthird ] \Int-off-off def
+  [ swap testlit [last swap \+ mapthird] [ Int.testoff [ dup last [third swap Int.off] dip swap Int.sum ] [ swap Int.sum ] ifelse ] ifelse ] \Int-off-add def
+  [ swap testlit [last swap \- mapthird] [ Int.testoff [ dup last [third _ swap Int.off] dip swap Int.sum ] [ swap Int.neg Int.sum ] ifelse ] ifelse ] \Int-off-sub def
+  #[ dthird _ abstract swap fourth "ne" apply ] \Int-off-bool def
+
+  [ rest rest lpop first "print" apply " " print_ print_ " *" print_ ] \Int-scale-print def
+  [ "{" print_ rest rest lpop first "print" apply " " print_ print_ " *" print_ "}" print_ ] \Int-scale-print_ def
+  [ dup2 [["map-df" apply] mapfourth] dip eval ] \Int-scale-map-df def
+  [ dup2 [["map-lr" apply] mapfourth] dip eval ] \Int-scale-map-lr def
+  [ [*] mapthird ] \Int-scale-scale def
+  [ swap testlit [last swap \* mapthird] [ Int.testscale [ dup last [third swap Int.scale] dip swap Int.mul ] [ swap Int.mul ] ifelse ] ifelse ] \Int-scale-mul def
+  [ [_] mapthird ] \Int-scale-neg def
+  [ dthird 0 = [pop False] [fourth "bool" apply] ifelse ] \Int-scale-bool def
+
+  [ rest rest lpop first "print" apply " " print_ print_ " /" print_ ] \Int-div-print def
+  [ "{" print_ rest rest lpop first "print" apply " " print_ print_ " /" print_ "}" print_ ] \Int-div-print_ def
+  [ dup2 [["map-df" apply] mapfourth] dip eval ] \Int-div-map-df def
+  [ dup2 [["map-lr" apply] mapfourth] dip eval ] \Int-div-map-lr def
+  [ [*] mapthird ] \Int-div-div def
+  [ swap testlit [last swap \* mapthird] [ swap Int.mul ] ifelse ] \Int-div-mul def
+  [ [_] mapthird ] \Int-div-neg def
+  #[ dthird abs abstract swap fourth "abs" apply "le" apply ] \Int-div-bool def
+
+  #[ "{" print_ rest rest lpop ["print" apply]dip ["+" print_"print" apply] each "}" print_ ] \Int-+-print def
+  [ rest rest lpop swap "print" apply [" " print_ "print" apply " +" print_] each ] \Int-+-print def
+  [ "{" print_ rest rest lpop swap "print" apply [" " print_ "print" apply " +" print_] each "}" print_ ] \Int-+-print_ def
+  [ 2 splitn swap [[dup2 ["map-df" apply] dip swap]map]dip swap cat swap eval] \Int-+-map-df def
+  [ 2 splitn swap [[dup2 ["map-lr" apply] dip swap]map]dip swap cat swap eval] \Int-+-map-lr def
+  [ dup rest rest [Int.islitoff] findp dup 0 ge [3 + \Int.off swap mapnth] [pop \Int.lit dip rpush] ifelse ] \Int-+-off def
+  [ swap testlit [last swap Int.off] [Int.sum] ifelse ] \Int-+-add def
+
+  [ rest rest lpop swap "print" apply [" " print_ "print" apply " *" print_] each ] \Int-*-print def
+  [ "{" print_ rest rest lpop swap "print" apply [" " print_ "print" apply " *" print_] each "}" print_ ] \Int-*-print_ def
+  [ 2 splitn swap [[dup2 ["map-df" apply] dip swap]map]dip swap cat swap eval] \Int-*-map-df def
+  [ 2 splitn swap [[dup2 ["map-lr" apply] dip swap]map]dip swap cat swap eval] \Int-*-map-lr def
+  [ dup rest rest [Int.islitscale] findp dup 0 ge [3 + \Int.scale swap mapnth] [pop \Int.lit dip rpush] ifelse ] \Int-*-scale def
+  [ swap testlit [last swap Int.scale] [Int.mul] ifelse ] \Int-*-mul def
+
+  [ rest rest lpop swap "print" apply [" " print_ "print" apply " /" print_] each ] \Int-/-print def
+  [ "{" print_ rest rest lpop swap "print" apply [" " print_ "print" apply " /" print_] each "}" print_ ] \Int-/-print_ def
+  [ 2 splitn swap [[dup2 ["map-df" apply] dip swap]map]dip swap cat swap eval] \Int-/-map-df def
+  [ 2 splitn swap [[dup2 ["map-lr" apply] dip swap]map]dip swap cat swap eval] \Int-/-map-lr def
+  [ dup rest rest [Int.islitdivide] findp dup 0 ge [3 + \Int.divide swap mapnth] [pop \Int.lit dip rpush] ifelse ] \Int-/-divide def
+  [ swap testlit [last swap Int.divide] [Int.div] ifelse ] \Int-/-div def
+
+  [ last "print" apply " _" print_ ] \Int-_-print def
+  [ "{" print_ last "print" apply " _}" print_ ] \Int-_-print_ def
+  [ dup2 [["map-df" apply] mapthird] dip eval ] \Int-_-map-df def
+  [ dup2 [["map-lr" apply] mapthird] dip eval ] \Int-_-map-lr def
+  [ third ] \Int-_-neg def
+  [ third "bool" apply ] \Int-_-bool def
+
+  [ pop "Bool" print_ ] \Int-bool-print def #| TODO: implement ops over bools
+  [ pop "Bool" print_ ] \Int-bool-print_ def
+
+  [ ">=" print_ rest rest lpop first "print" apply ] \Int-floor-print def
+  [ "{" print_ ">=" print_ rest rest lpop first "print" apply "}" print_ ] \Int-floor-print_ def
+  [ dup2 [["map-df" apply] mapfourth] dip eval ] \Int-floor-map-df def
+  [ dup2 [["map-lr" apply] mapfourth] dip eval ] \Int-floor-map-lr def
+  [ [inc] mapthird ] \Int-floor-inc def
+  [ [dec] mapthird ] \Int-floor-dec def
+  [ [+] mapthird ] \Int-floor-off def
+  [ swap testlit [last swap \+ mapthird] [ Int.testfloor [ dup last [] dip swap Int.sum ] [ swap Int.sum ] ifelse ] ifelse ] \Int-floor-add def
+  [ swap testlit [last swap \- mapthird] [ Int.testfloor [ dup last [third _ swap Int.off] dip swap Int.sum ] [ swap Int.neg Int.sum ] ifelse ] ifelse ] \Int-floor-sub def
+  #[ dthird _ abstract swap fourth "ne" apply ] \Int-off-bool def
+
+#Abstract lists
+  ("Coll") \Coll def
+  ("List") \List def
+  ("Code") \Code def
+  
+  [ ("List" "" () ()) ref ("List" "arg") rpush (0 0) cat ] \List.Arg def #| -- ( "List" "arg" Ref{"List" "" () ()} 0 0 )
+  [ (() ()) lpush "List" swap lpush ref ("List" "arg") rpush (0 0) cat ] \List.arg def #| "Name" -- ( "List" "arg" Ref{"List" "Name" () ()} 0 0 )
+
+  [ dfirst ("rpush") lpush rpush rpush ] \Coll.rpush_ def
+  [ dfirst ("lpush") lpush rpush rpush ] \Coll.lpush_ def
+  [ swap dfirst ("cat") lpush [() rpush rpush] dip rpush ] \Coll.cat_ def
+  [ ("List" "a") rpush ] \List.abs def
+
+  ["List" Val.coerce] \List.coerce def
+
+  [ ("Code" "a") rpush ] \Code.abs def
+  
+  [ "lpop" apply ] \Coll.lpop def
+  [ "lpush" apply ] \Coll.lpush def
+  [ "rpop" apply ] \Coll.rpop def
+  [ "rpush" apply ] \Coll.rpush def
+  [ "empty" apply ] \Coll.empty def
+  [ Coll.empty Val.definitely_true ] \Coll.definitely_empty def
+  [ Coll.empty Val.definitely_false ] \Coll.definitely_notempty def
+  [ Coll.empty Val.definitely_false not ] \Coll.maybe_empty def
+  [
+    dup2 Coll.iscat [
+      dup Coll.iscat [
+        third swap [swap cat] mapthird
+      ] [
+        swap [rpush] mapthird
+      ] ifelse
+    ] [
+      dup Coll.iscat [
+        [dfirst swap] dip [lpush] mapthird [pop] mapfirst
+      ] [
+        Coll.cat_
+      ] ifelse
+    ] ifelse
+  ] \Coll.cat def
+
+  ["Coll" Val.coerce] \Coll.coerce def
+
+  [ dup small [pop 0] [second "lpush" =] ifelse ] \Coll.islpush def
+  [ dup small [pop 0] [second "rpush" =] ifelse ] \Coll.isrpush def
+  [ dup small [pop 0] [second "cat" =] ifelse ] \Coll.iscat def
+
+  [ "lpop" apply ] \List.lpop def
+  [ "lpush" apply ] \List.lpush def
+  [ "rpop" apply ] \List.rpop def
+  [ "rpush" apply ] \List.rpush def
+  [ "empty" apply ] \List.empty def
+
+
+  [ dfirst "Coll" type.isa [pop] [dfirst "Val" = [pop Coll] ["Failed Type Coersion" throw] ifelse] ifelse ] \Coll-coerce def
+  [ pop " ..." print_ ] \Coll-print_part def
+  [ swap eval ] dup \Coll-map-df def \Coll-map-df def
+  [ swap eval ] dup \Coll-map-df def \Coll-map-lr def
+  [ Val swap ] \Coll-rpop def
+  [ Val swap ] \Coll-lpop def
+  [ popd ] \Coll-rpush def
+  [ popd ] \Coll-lpush def
+  [ pop ] \Coll-cat def
+  [ pop Bool ] \Coll-empty def
+
+  [ dthird deref first dup "Coll" type.isa [swap rest lpush (0 0) cat] ["Val" = ["Coll" swap rest lpush (0 0) cat [["Coll" swap rest lpush (() ()) cat] guard] mapthird] ["Failed Type Coersion" throw] ifelse] ifelse ] \Coll-arg-coerce def
+
+  [
+    rpop rpop rpop pop deref #| rpops lpops ("List" "Name" (left) (right))
+    dthird dig2 splitn popd [" " print_ "print_" apply] each
+    " " print_ dsecond print_ "..." print_
+    dfourth dig2 splitn popd [ " " print_ "print_" apply] eachr
+    pop
+  ] \Coll-arg-print_part def
+  [
+    dfourth swap [[ [ swap splitn swap [[dup2 ["map-df" apply] dip swap] mapr]dip swap cat ] mapthird ] guard] mapthird
+    dfifth  swap [[ [ swap splitn swap [[dup2 ["map-df" apply] dip swap] mapr]dip swap cat ] mapfourth ] guard] mapthird
+    swap eval
+  ] \Coll-arg-map-df def
+  [
+    dfourth swap [[ [ swap splitn swap [[dup2 ["map-lr" apply] dip swap] mapr]dip swap cat ] mapthird ] guard] mapthird
+    dup2 [swap eval] dip swap
+    Val.testcoll [dup Val.isarg] and [ #as long as we are still a coll-arg handle rhs
+      dfifth  swap [[ [ swap splitn swap [[dup2 ["map-lr" apply] dip swap] mapr]dip swap cat ] mapfourth ] guard] mapthird
+    ] if #else we changed the type half way through so just give up
+    popd
+  ] \Coll-arg-map-lr def
+
+  [ dthird [ [swap [ inc 2dup \size dip ge [ 2dup [nth] dip2 ] [ [ [ Arg dup ] dip rpush ] dip ] ifelse ] mapfifth swap] mapfourth ] guard pop ] \Coll-arg-rpop def
+  [ dthird [ [swap [ inc 2dup \size dip ge [ 2dup [nth] dip2 ] [ [ [ Arg dup ] dip rpush ] dip ] ifelse ] mapfourth swap] mapthird ] guard pop ] \Coll-arg-lpop def
+  [ Coll.rpush_ ] \Coll-arg-rpush def
+  [ Coll.lpush_ ] \Coll-arg-lpush def
+  [ Coll.cat ] \Coll-arg-cat def
+  [ dthird deref [[rpop swap]dip rpop [size <] dip swap] dup or [pop pop 0 Int.lit] [pop pop Bool] ifelse ] \Coll-arg-empty def
+
+  [ last [ " " print_ "print_" apply ] each ] \Coll-a-print_part def
+  [ [[dup2 ["map-df" apply] dip swap]map] mapthird swap eval ] \Coll-a-map-df def
+  [ [[dup2 ["map-lr" apply] dip swap]map] mapthird swap eval ] \Coll-a-map-lr def
+  [ [ rpop ] maplast ] \Coll-a-rpop def
+  [ [ lpop ] maplast ] \Coll-a-lpop def
+  [ [ rpush ] maplast ] \Coll-a-rpush def
+  [ [ lpush ] maplast ] \Coll-a-lpush def
+  [ dup2 Coll.isabs [third swap [swap cat]mapthird] [Coll.cat] ifelse ] \Coll-a-cat def
+  [ last empty abstract ] \Coll-a-empty def
+
+  [ last [ " " print_ print_ ] each ] \Coll-lit-print_part def
+  [ swap eval ] dup \Coll-lit-map-df def \Coll-lit-map-lr def
+  [ [ rpop \abstract dip ] maplast ] \Coll-lit-rpop def
+  [ [ lpop \abstract dip ] maplast ] \Coll-lit-lpop def
+  [ [pop "a"] mapsecond [[abstract]map] mapthird] \List.lit.toabs def
+  [ dup2 abstract.islit [ \last dip [rpush]mapthird ] [ dlast empty [ List.lit.toabs Coll-a-rpush ] [Coll.rpush_] ifelse ] ifelse ] \Coll-lit-rpush def
+  [ dup2 abstract.islit [ \last dip [lpush]mapthird ] [ dlast empty [ List.lit.toabs Coll-a-lpush ] [Coll.lpush_] ifelse ] ifelse ] \Coll-lit-lpush def
+  [ dup2 islit [third swap [swap cat]mapthird] [Coll.cat] ifelse ] \Coll-lit-cat def
+  [ last empty abstract ] \Coll-lit-empty def
+
+  [ rest rest lpop swap "print_part" apply [" " print_ "print_" apply ] each ] \Coll-rpush-print_part def
+  [ dup2 [["map-df" apply]mapthird] dip swap 3 splitn swap [[dup2 ["map-df" apply] dip swap] map] dip swap cat swap eval ] \Coll-rpush-map-df def
+  [ dup2 [["map-lr" apply]mapthird] dip swap 3 splitn swap [[dup2 ["map-lr" apply] dip swap] map] dip swap cat swap eval ] \Coll-rpush-map-lr def
+  [ rpop dup size 3 = [ third ] if ] \Coll-rpush-rpop def
+  [ dthird Coll.definitely_empty [ dup size 4 = [rpop last] [3 splitn lpop swapd cat] ifelse ] [ [ "lpop" apply ] mapthird ] ifelse ] \Coll-rpush-lpop def
+  [ rpush ] \Coll-rpush-rpush def
+  [ Coll.lpush_ ] \Coll-rpush-lpush def
+  [ [Coll.cat] mapthird ] \Coll-rpush-cat def
+  [ pop 0 abstract ] \Coll-rpush-empty def
+
+  [ rest rest lpop [" " print_ "print_" apply ] eachr "print_part" apply ] \Coll-lpush-print_part def
+  [ 3 splitn swap [[dup2 ["map-df" apply] dip swap] mapr] dip swap cat [dup2 ["map-df" apply] dip swap] mapthird swap eval] \Coll-lpush-map-df def
+  [ 3 splitn swap [[dup2 ["map-lr" apply] dip swap] mapr] dip swap cat [dup2 ["map-lr" apply] dip swap] mapthird swap eval] \Coll-lpush-map-lr def
+  [ dthird Coll.definitely_empty [ dup size 4 = [rpop last] [3 splitn lpop swapd cat] ifelse ] [ [ "rpop" apply ] mapthird ] ifelse ] \Coll-lpush-rpop def
+  [ rpop dup size 3 = [ third ] if ] \Coll-lpush-lpop def
+  [ Coll.rpush_ ] \Coll-lpush-rpush def
+  [ rpush ] \Coll-lpush-lpush def
+  [ Coll.cat ] \Coll-lpush-cat def #TODO: for small fixed arity lists we can just push the elements
+  [ pop 0 abstract ] \Coll-lpush-empty def
+
+  [ last [ "print_part" apply ] each ] \Coll-cat-print_part def
+  [ [[dup2 ["map-df" apply] dip swap]map] mapthird swap eval ] \Coll-cat-map-df def
+  [ [[dup2 ["map-lr" apply] dip swap]map] mapthird swap eval ] \Coll-cat-map-lr def
+  [
+    [
+      [dup empty not [dlast Coll.definitely_empty] and] [rpop popd] while
+      dup empty ["Empty Coll" throw] [
+        dup small [dlast Coll.definitely_notempty] or [
+          ["rpop" apply] maplast #yay, we can just pop an arg
+        ] [
+          [dup empty not [dlast Coll.maybe_empty] and] [rpop popd] while
+          dup empty not [ rpop popd ] if #TODO: we don't have to pop whole coll if first has known last el
+          Val swap Coll swap rpush #TODO: cleanup (e.g. when first has leading ...)
+        ] ifelse
+      ] ifelse
+    ] mapthird
+  ] \Coll-cat-rpop def
+  [
+    [
+      [dup empty not [dfirst Coll.definitely_empty] and] [rest] while
+      dup empty ["Empty Coll" throw] [
+        dup small [dfirst Coll.definitely_notempty] or [
+          ["lpop" apply] mapfirst #yay, we can just pop an arg
+        ] [
+          [dup empty not [dfirst Coll.maybe_empty] and] [rest] while
+          dup empty not [ rest ] if #TODO: we don't have to pop whole coll if first has known first el
+          Val swap Coll swap lpush #TODO: cleanup (e.g. when first has leading ...)
+        ] ifelse
+      ] ifelse
+    ] mapthird
+  ] \Coll-cat-lpop def
+  [ dthird empty [ [rpush]mapthird [pop "a"]mapsecond ] [ [ [ "rpush" apply ] maplast ] mapthird ] ifelse ] \Coll-cat-rpush def
+  [ dthird empty [ [lpush]mapthird [pop "a"]mapsecond ] [ [ [ "lpush" apply ] mapfirst ] mapthird ] ifelse ] \Coll-cat-lpush def
+  [ Coll.cat ] \Coll-cat-cat def
+  [ third dup empty [pop 1] [ lpop ["empty" apply] dip [dup empty not [dup2 Val.maybe_true] and] [ lpop ["and" apply] dip ] while pop ] ifelse ] \Coll-cat-empty def
+
+  #TODO: something better than duplicating the functions (e.g. inheritance)
+  ( "" "arg-" "a-" "lit-" "rpush-" "lpush-" "cat-" ) [
+    ("print_part" "map-df" "map-lr" "rpop" "lpop" "rpush" "lpush" "cat" "empty") [
+      dup2 rpush dup "Coll-" rpush toident getdef swap
+      ["List-" rpush toident def] sip2
+      "Code-" rpush toident def
+    ] each
+
+    "print" cat
+    [
+      "List-" rpush dup [
+        "_part" cat toident
+        [ "(" print_ ] rpush [ " )" print_ ] cat
+      ] dip
+      [toident def] sip2 "_" cat toident def
+    ] sip
+    [
+      "Code-" rpush dup [
+        "_part" cat toident
+        [ "[" print_ ] rpush [ " ]" print_ ] cat
+      ] dip
+      [toident def] sip2 "_" cat toident def
+    ] sip
+    "Coll-" rpush dup [
+      "_part" cat toident
+      [ "((" print_ ] rpush [ " ))" print_ ] cat
+    ] dip
+    [toident def] sip2 "_" cat toident def
+  ] each
+
+#Abstract expressions
+  #TODO: maybe we have a single "expr" type to collect some/all this info
+  [ ("Int" "empty") rpush ] \Coll.empty_ def
+  [ ("Int" "small") rpush ] \Coll.empty_ def
+  [ ("Int" "size") rpush ] \Coll.size_ def
+  [ ("Int" "tobool") rpush ] \Val.tobool_ def
+  [ ("Int" "not") rpush ] \Val.not_ def
+  [ ("Int" "=") rpush rpush ] \Val.eq_ def
+  [ ("Int" "ne") rpush rpush ] \Val.ne_ def
+  [ ("Int" "<") rpush rpush ] \Val.lt_ def
+  [ ("Int" "<=") rpush rpush ] \Val.le_ def
+  [ ("Int" "and") rpush rpush ] \Int.and_ def
+  [ ("Int" "or") rpush rpush ] \Int.or_ def
+
+#Abstract interpreter
+
+  #call type-specific named function <top> on <second>
+  [
+    dup2 abstract.isopt [
+      () swap [
+        dup3 apply
+        [ swap rpush ] dip
+      ] map
+    ] [
+      [ dfirst "-" cat dup2 small not [ \dsecond dip swap cat "-" cat ] if ] dip
+      cat
+      toident eval
+    ] ifelse
+  ] \apply def #| ... (val) "op"
+
+
+  [ List.Arg ] \Stack.Arg def
+  [ List.empty ] \Stack.empty def
+  [ Coll.definitely_notempty ] \Stack.definitely_notempty def
+
+  [ List.rpop ] \Stack.pop def #| (stack top) -- (top) (stack)
+  [ List.rpush ] \Stack.push def
+  [ Stack.pop Stack.pop swapd ] \Stack.pop2 def
+  [ Stack.pop Stack.pop Stack.pop [flip3] dip ] \Stack.pop3 def
+  [ 4 \Stack.pop times [4 flipn] dip ] \Stack.pop4 def
+  [ swapd List.rpush List.rpush ] \Stack.push2 def
+  [ [flip3] dip Stack.push Stack.push Stack.push ] \Stack.push3 def
+  [ [4 flipn] dip 4 \Stack.push times ] \Stack.push4 def
+
+  [ Stack.pop [Int.coerce] dip ] \Stack.popint def
+  [ Stack.pop [Coll.coerce] dip ] \Stack.popcoll def
+  [ Stack.popint Stack.popint swapd ] \Stack.pop2int def
+  [ Stack.popcoll Stack.popcoll swapd ] \Stack.pop2coll def
+
+  [
+    dup2 empty not [ "Continuation not empty (Not Implemented yet)" throw ] if popd
+  ] \Stack.rcat def
+
+  [
+    swap Val.testcode [dup Coll.definitely_empty] and [pop] [swap Stack.push] ifelse
+  ] \Work.push def
+
+  [
+    Stack.pop
+    [ Val.testcode ] dip swap
+    [ [List.lpop] dip Work.push ] if
+  ] \Work.popnext def
+
+  [
+    dup Stack.definitely_notempty
+  ] \Work.hasnext def
+
+  #[ \Stack.pop2 dip \eval dip Stack.push () ] \Stack.2apply1 def #UNTESTED
+
+  [ Stack.pop2int ["add" apply] dip Stack.push () ] \a-+ def
+  [ Stack.pop2int ["sub" apply] dip Stack.push () ] \a-- def
+  [ Stack.pop2int ["mul" apply] dip Stack.push () ] \a-* def
+  [ Stack.pop2int ["div" apply] dip Stack.push () ] \a-/ def
+  [ Stack.popint ["_" apply] dip Stack.push () ] \a-_ def
+
+  [ Stack.pop2int ["and" apply] dip Stack.push () ] \a-and_ def
+  [ Stack.pop2int ["or" apply] dip Stack.push () ] \a-or_ def
+  [ Stack.popint ["not" apply] dip Stack.push () ] \a-not def
+  
+  [ Stack.pop2 [swap] dip Stack.push2 () ] \a-swap def
+  [ Stack.pop popd () ] \a-pop def
+  [ Stack.pop dupd Stack.push2 () ] \a-dup def
+  [ Stack.pop2 [dup2]dip Stack.push3 () ] \a-dup2 def
+  [ Stack.pop3 [dup3]dip Stack.push4 () ] \a-dup3 def
+
+  [ Stack.pop [Coll.coerce Coll.lpop] dip Stack.push2 () ] \a-lpop def
+  [ Stack.pop2 [Coll.coerce Coll.lpush] dip Stack.push () ] \a-lpush def
+  [ Stack.pop [Coll.coerce Coll.rpop] dip Stack.push2 () ] \a-rpop def
+  [ Stack.pop2 [Coll.coerce Coll.rpush] dip Stack.push () ] \a-rpush def
+  [ Stack.pop2coll ["cat" apply] dip Stack.push () ] \a-cat def
+  [ Stack.pop [Coll.coerce Coll.empty] dip Stack.push () ] \a-empty def
+
+  [
+    Val.testpush [
+      swap Stack.push ()
+    ] [
+      Val.testident [
+       "a-" swap last cat toident
+       dup defined [
+         eval
+       ] [
+        "Undefined:" dup2 cat throw
+       ] ifelse
+      ] [
+         "Not Implemented:" dup2 cat throw
+      ] ifelse
+    ] ifelse
+  ] \a-eval def
+
+  [
+    Work.popnext
+    [ Val.testcode [swap Stack.push ()] [a-eval] ifelse ] dip
+    Stack.rcat
+  ] \step def
+  
+  [
+    [ Work.hasnext ] [ step ] while
+  ] \dowork def
+
+  [dup empty [pop "A"] [rpop dup2 "Z" = [popd nextname "A" cat] [[0 getbyte inc 0 setbyte] dip rpush] ifelse ] ifelse] \nextname def
+
+  [
+    () rpush abstract Stack.Arg dup swapd
+    [ dowork pop ] dip #eval work
+
+    #this version names all output args except stack (ordered by input order)
+    #[ [ dup Val.isarg ["*" swap Arg.setname] if ] Val.map-df ] dip #tag args that show up in output
+    #"" swap Arg.setname #clear tag for stack
+    #"" swap [dup Val.isarg [Arg.getname swap "*" =] and [[nextname dup]dip Arg.setname] if] Val.map-lr popd #assign names to tagged args ordered by input stack stack
+
+    #this version names all input args (except stack)
+    "*" swap Arg.setname #set placeholder name for stack
+    "" swap [dup Val.isarg [Arg.getname swap empty] and [[nextname dup]dip Arg.setname] if] Val.map-lr popd #assign names to unnamed args ordered by input stack stack
+    "" swap Arg.setname #clear placeholder name for stack
+
+    "(" print_ "print_part" apply " -- " print_
+    "print_part" apply " )" print
+
+    #Val.print Val.print
+  ] \print_effects def
+] savescope dup dup
+[
+  \apply usescope_
+] lpush \a def #| ... (val) "op" -- apply op to abstract vals
+[
+  \eval usescope_
+] lpush \a.do def
+[
+  \dowork usescope_
+] lpush \a.dowork def #| ... (val) "op" -- apply op to abstract vals
+
+[
+  dup type.get ("lit") lpush rpush
+] \abstract def #| val -- ("Type" "lit" val)  convert literal value to abstract
+
+[
+  () lpush lpush
+] \abstract.opt def #| (abs1) (abs2) -- ((abs1) (abs2))  create abstract with 2 "options" (possible abstract values)
+
+[
+  first islist
+] \abstract.isopt def  #| (abstract) -- hasopt  check whether abstract value has multiple "options" (set of abstracts that this abstract could be))
+
+[
+  dup small [pop 0] [ second "lit" = ] ifelse
+] \abstract.islit def
+
+[
+  first
+] \abstract.type def
+
+("Val") \abstract.val def
+("Int") \abstract.int def
+("Float") \abstract.float def
+("Num")  \abstract.num def
+("String") \abstract.string def
+("Ident") \abstract.ident def
+("StringType") \abstract.stringtype def
+("Native") \abstract.native def
+("List") \abstract.list def
+("Code") \abstract.code def
+("Coll") \abstract.coll def
+("Hash") \abstract.hash def
+("File") \abstract.file def
+
+("Int" "bool") \abstract.bool def
+
+[
+  
+] \abstract.union def
+
+[
+  \abstract.type dip type.isa
+] \abstract.isa def
+
+[
+  dupd abstract.isa not [ "Type Assert Failed" throw ] if
+] \abstract.asserttype def
+
+[[(1 2 3) swap cat lpop lpop lpop lpop lpop lpush swap cat lpop] print_effects] a.do

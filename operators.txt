@@ -1,0 +1,282 @@
+#Copyright (C) 2020 D. Michael Agun
+#
+#Licensed under the Apache License, Version 2.0 (the "License");
+#you may not use this file except in compliance with the License.
+#You may obtain a copy of the License at
+#
+#http://www.apache.org/licenses/LICENSE-2.0
+#
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+
+//type checking ops
+isnum       - (A -- B)
+isstring    - (A -- B)
+isident     - (A -- B)
+isnative    - (A -- B)
+islist      - (A -- B)
+iscode      - (A -- B)
+islisttype  - (A -- B)
+isfile      - (A -- B)
+ispush      - (A -- B)  whether A is a simple type whose evaluation pushes itself (e.g. int,string,list)
+
+//vm ops
+quit      - (--) quit concat
+qstate    - (--) prints 1-line vm state (top couple of stack and wstack, printed compactly)
+vstate    - (--) prints 1-line vm state (complete stack and wstack)
+vm        - ((stack) (work) -- {vm: stack <|> work }) create vm val from stack & work -- NOTE: work is popped from right
+thread    - ((stack) (work) -- {running vm: stack <|> work }) create vm val from stack & work -- NOTE: work is popped from right
+
+//exception handling
+trycatch  - ([try][catch] trycatch -- try) OR ([try][catch] trycatch -- err catch) evals try, if exception occurs unwinds stack to before trycatch, then pushes exception and evals catch
+trydebug  - ([try] trydebug -- try) evals try, starting a debugger and at the point where an exception occurs if one does
+perror    - (errno --) print top of stack as exception (if it is integer, tries to interpret as standard error code)
+throw     - (err --EXCEPTION)throw top of stack as exception
+
+//dictionary ops
+defined   - (\word -- bool) check if word is defined
+getdef    - (\word -- def) evals to word definition
+def       - (definition \word --) define word
+mapdef    - ([A] I -- I getdef A I def) modify a dictionary definition (more efficient than getdef/def since it moves the definition out of the dictionary temporarily)
+
+scope     - ([A] -- begin_scope A end_scope) -- evaluates A inside its own variable scope, so definitios/redefinitions made in A are undone at the end of A
+savescope - ([A] -- begin_scope A end_scope {hash}) -- evaluates A inside its own variable scope, then pushes that scope as a {hash} object for reuse by usescope
+usescope  - ({hash} [A] -- {hash} push_scope A end_scope {hash}) -- evaluates A inside the scope defined by the {hash} argument, leaving the {hash} on top of stack
+usescope_ - ({hash} [A] -- {hash} push_scope A end_scope) -- evaluates A inside the scope defined by the {hash} argument, then destroys the {hash} without returning it
+hget      - ({hash} A -- {hash} def) -- gets definition of A in {hash} (or throws UNDEFINED)
+hhas      - ({hash} A -- {hash} bool) -- gets whether {hash} contains a definition for A
+
+//printing ops
+list      - (--) print stack contents
+listn     - (n --) print top n items of stack
+print     - (A --) print and pop top of stack (followed by newline)
+print_    - (A --) print and pop top of stack
+peek      - (A -- A) print top of stack without popping (followed by newline)
+printf    - (... "formatstring" -- ) formatted print statement, where "%v" prints top of stack, "%V" calls print_code_ on top of stack, "%_" pops the top of the stack, and "%%" outputs a literal "%" symbol
+
+//math ops
++         - (A B -- C) add
+-         - (A B -- C) subtract
+*         - (A B -- C) multiply
+/         - (A B -- C) divide
+%         - (A B -- C) modulo
+^         - (A B -- C) pow
+
+&         - ( A B -- A & B ) bitwise and
+|         - ( A B -- A | B ) bitwise or
+xor       - ( A B -- A xor B ) bitwise xor
+~         - ( A -- ~A ) bitwise invert
+
+_         - (A -- B) negate
+
+inc       - (A -- B) increment int/float
+dec       - (A -- B) decrement int/float
+sqrt      - (A -- B) square root
+log       - (A -- B) natural log
+abs       - (A -- B) absolute value
+sin       - (A -- B) sin
+cos       - (A -- B) cos
+tan       - (A -- B) tan
+asin      - (A -- B) asin
+acos      - (A -- B) acos
+atan      - (A -- B) atan
+atan2     - (y x -- B) atan2
+
+rand      - ( -- A) generate random integers between 0 and RAND_MAX
+randf     - ( -- A) generate random floats between 0.0 and 1.0
+srand     - (A -- ) seed random number generator (argument must be int)
+RAND_MAX  - ( -- A) maximum value for rand
+
+pi        - ( -- 3.14159265358979323846)
+e         - ( -- 2.71828182845904523536)
+
+toint     - (A -- B) truncate float to integer
+tofloat   - (A -- B) convert integer to float
+parsenum  - (A -- B) parse int/float from string
+tryparsenum  - ("1" -- 1); ("a" -- "a") parse int/float from string
+
+//general collection ops
+//NOTE: the push/pop/append operators may do the opposite of what you would intuitively expect, but this ordering tends to produce cleaner code in real algorithms
+  - e.g. you can keep using [lpop [code] dip] to pull off the top item and operate on it, leaving the remaining list on top for the next iteration
+size      - ([A] -- 1); ([A B] -- 2); ("abc" -- 3) size of list of string
+empty     - ([] -- 1); ([A] -- 0); ([A B] -- 0) whether list/string is empty
+small     - ([] -- 1); ([A] -- 1); ([A B] -- 0) whether size <= 1
+lpop      - ([A B] -- A [B])
+lpush     - (A [B] -- [A B])
+rpop      - ([A B] -- B [A])
+rpush     - (A [B] -- [B A])
+cat       - ([A] [B] -- [A B])
+rappend   - ([A] [B] -- [B A]); (A [B] -- [B A])
+splitn    - ("abcdef" 2 -- "ab" "cdef")
+
+expand    - ([A B] -- A B) expand list into elements on stack (without evaling)
+sort      - ((3 4 1 5 2) -- (1 2 3 4 5))
+rsort     - ((3 4 1 5 2) -- (5 4 3 2 1))
+
+setnth    - ((a b c d e) f 2 -- (a f c d e)); ((a b c d e) f 4 -- (a b c f e))
+swapnth   - ((a b c d e) f 2 -- (a f c d e) b); ((a b c d e) f 4 -- (a b c f e) d)
+rsetnth   - (f (a b c d e) 2 -- (a f c d e)); (f (a b c d e) 4 -- (a b c f e))
+mapnth    - ((a b c d e) [X] 2 -- (a bX c d e)); ((a b c d e) [X] 4 -- (a b c dX e))
+
+nth       - ([A B] 1 -- A); ([A B] 2 -- B)
+first     - ((A B C D E F G H I J) -- A)
+rest      - ((A B C D E F G H I J) -- (B C D E F G H I J))
+second    - ((A B C D E F G H I J) -- B)
+third     - ((A B C D E F G H I J) -- C)
+fourth    - ((A B C D E F G H I J) -- D)
+fifth     - ((A B C D E F G H I J) -- E)
+sixth     - ((A B C D E F G H I J) -- F)
+seventh   - ((A B C D E F G H I J) -- G)
+eight     - ((A B C D E F G H I J) -- H)
+ninth     - ((A B C D E F G H I J) -- I)
+tenth     - ((A B C D E F G H I J) -- J)
+last      - ((A B C D E F G H I J) -- J)
+
+dnth      - ([A B] 1 -- [A B] A); ([A B] 2 -- [A B] B)
+dfirst    - ((A B C D E F G H I J) -- (A B C D E F G H I J) A)
+dsecond   - ((A B C D E F G H I J) -- (A B C D E F G H I J) B)
+dthird    - ((A B C D E F G H I J) -- (A B C D E F G H I J) C)
+dfourth   - ((A B C D E F G H I J) -- (A B C D E F G H I J) D)
+dfifth    - ((A B C D E F G H I J) -- (A B C D E F G H I J) E)
+dsixth    - ((A B C D E F G H I J) -- (A B C D E F G H I J) F)
+dseventh  - ((A B C D E F G H I J) -- (A B C D E F G H I J) G)
+deight    - ((A B C D E F G H I J) -- (A B C D E F G H I J) H)
+dninth    - ((A B C D E F G H I J) -- (A B C D E F G H I J) I)
+dtenth    - ((A B C D E F G H I J) -- (A B C D E F G H I J) J)
+dlast     - ((A B C D E F G H I J) -- (A B C D E F G H I J) J)
+
+
+//string ops
+tostring   - ("A" -- "A" ); ( 1 -- "1")
+substr     - ("abcdef" 1 3 substr -- "bcd")
+trim       - ("  a " -- "a")
+split      - (" a  b c d" -- ("a" "b" "c" "d"))
+split2     - ("a,b,,c, d" ",;" -- ("a" "b" "" "c" " d"))
+find       - ("a b c" " " -- 1); ("a b c" " c" -- 3); ("a b c" "c " -- -1)
+rfind      - ("a b c" " " -- 3); ("a a a" "a" -- 4); ("a b c" "c " -- -1)
+firstof    - ("a b,c" ", " -- 1); ("a b,c" ";" -- -1)
+lastof     - ("a b,c" ", " -- 3); ("a b,c" ";" -- -1)
+firstnotof - (" ,a b ," ", " -- 2); ("a;b;c" "abc;" -- -1)
+lastnotof  - (" ,a b ," ", " -- 4); ("a;b;c" "abc;" -- -1)
+
+strhash    - ("abc" -- 1134309195); ("abcd" -- 3118363509) take hash of string (currently unsigned 32bit hash)
+
+
+//list operators
+wrap      - (A -- (A))
+wrap2     - (A B -- (A B))
+wrap3     - (A B C -- (A B C))
+wrapn     - (4 A B C D -- (A B C D))
+
+//stack manipulators
+clear     - (... --)
+collapse  - (... -- (...)) collapse entire stack into list on stack (can then use with restore/expand)
+restore   - ( ... (A B C) -- A B C ... ) inserts the contents of list underneath the stack
+stacksize - (-- stacksize) push current size of stack onto stack
+
+swap      - (A B -- B A)
+dup       - (A -- A A)
+dup2      - (A B -- A B A)
+dup3      - (A B C -- A B C A)
+2dup      - (A B -- A B A B)
+3dup      - (A B C -- A B C A B C)
+dupn      - (A B 2 -- A B A)
+pop       - (A --)
+popd      - (A B -- B) shortcut for [pop] dip
+dupd      - (A B -- A A B) shortcut for [dup] dip
+swapd     - (A B C -- B A C) shortcut for [swap] dip
+
+dig2      - (A B C -- B C A)
+dig3      - (A B C D -- B C D A)
+bury2     - (A B C -- B A B)
+bury3     - (A B C D -- D A B C)
+flip3     - (A B C -- C B A)
+flip4     - (A B C D -- D C B A)
+dign      - (A B C D 3 -- B C D A)
+buryn     - (A B C D 3 -- D A B C)
+flipn     - (A B C D 4 -- D C B A)
+
+//combinators
+eval      - ([A] -- A)
+quote     - (A -- [A])
+dip       - ([A] [B] -- B [A])
+dip2      - ([A] [B] [C] -- C [A] [B])
+dip3      - ([A] [B] [C] [D] -- D [A] [B] [C])
+dipn      - ([A] [B] [C] 2 -- C [A] [B])
+dipe      - ([A] [B] -- B A) equivalent to [dip eval], but faster since it can directly wpush [A] (instead of protect and wpush [A], then eval)
+sip       - ([A] [B] -- [A] B [A])
+sip2      - ([A] [B] [C] -- [A] [B] C [A] [B])
+sip3      - ([A] [B] [C] [D] -- [A] [B] [C] D [A] [B] [C])
+sipn      - ([A] [B] [C] 2 -- [A] [B] C [A] [B])
+napply    - (... x y z [A] 3 -- ... x y z A ) run quotation on top n items of stack (hides rest of stack and then restores underneath results of quotation after)
+spread    - (x y z ([A] [B] [C]) -- (xA yB zC)) run each quotation in list on an item from the stack to produce a new list of the same length
+
+//conditional operators
+if      - (TRUE [body] -- body); (FALSE [body] --) eval top if second evaluates to true
+ifelse  - (TRUE [then] [else] -- then); (FALSE [then] [else] -- else) eval second if third evaluates to true, otherwise evaluate top
+
+//loop operators
+each   - ([A B C] [body] -- A body B body C body) eval top once for each element of list
+times  - (2 [body] -- body body) eval top n times
+while  - ([cond] [body] -- cond pop); ([cond] [body] -- cond body [cond] [body] while) run cond, keep running then top and cond again if cond evals to true
+
+filter - ([1 2 3 4 5] [3>] -- [4 5]) filter list by running top on each element and either including/excluding the element
+map    - ([1 2 3 4 5] [3+] -- [4 5 6 7 8]) run top on each element of list to produce new list of same length
+mmap   - (list mapfun -- newlist) like map but when result of map function is a list then it is appended to the output list instead of pushed
+cleave - (x [B C D] -- x A x B x C) run each element of top on second
+bi     - (x A B -- x A x B) run each of top and second on third
+tri    - (x A B C -- x A x B x C)
+
+
+//recursion operators
+linrec - ([cond] [base] [rec1] [rec2] -- rec1 rec1... base rec2 rec2...) if base case then evals [base], else evals [rec1], recurses, and evals [rec2]
+binrec - ([cond] [base] [split] [merge] -- ...) if base case then evals [base], else evals [split], then recurses on each of 2nd and top val, then evals [merge]
+
+
+//comparison operators
+<   - (A B -- C) less than
+>   - (A B -- C) greater than
+=   - (A B -- C) equal to
+lt  - (A B -- C) less than
+gt  - (A B -- C) greater than
+eq  - (A B -- C) equal to
+le  - (A B -- C) less then or equal to
+ge  - (A B -- C) greater than or equal to
+ne  - (A B -- C) not equal to
+compare  - (A B -- C) compare top with second (0 if equal, <0 if second<top, >0 otherwise)
+
+//boolean operators
+true   - ( -- 1) push 1
+false  - ( -- 0) push 0
+not    - (A -- B) invert boolean value (so returns 1 if zero, 0 otherwise)
+and    - (A B -- C) AND of top 2 values
+or     - (A B -- C) OR of top 2 values
+
+//file operators
+include   - (fname -- script_code) takes top item of stack (which should be string filename), opens that file as runs it as a concat script
+openr     - (fname -- file) open file in read mode by filename (leaves file on top of stack)
+open      - (fname mode -- file) open file using specified mode by filename (leaves file on top of stack) -- see C fopen function for mode options
+readline  - (file -- file line len); (file -- file err) read line from file on top of stack (leaves length of string or error on top, then line if not error, then file)
+stdin.readline  - (-- line len); (-- err) read line from stdin (leaves length of string or error on top, then line if not error, then file)
+read      - (file nbytes -- file str len); (file nbytes -- file err) read bytes from file (leaves number of bytes actually read or error on top, then line if not error, then file)
+write     - (file str -- file ret) write string to file (use isferr to test whether return value indicates error, otherwise string was written successfully)
+writeline - (file str -- file ret) write val then newline to file
+isferr    - if the return value from readline indicates an error (failed read)
+isfeof    - if return value from readline is an EOF error
+eachline  - (file [body] -- file line1 body line2 body ...) call body on each line of file
+
+
+//reference operators
+ref      - (A -- ref(A)) creates a shared (reference) object
+deref    - (ref(A) -- A) unwraps a reference object (clones/moves referred object depending on refcount)
+refswap  - (ref(A) B -- ref(B) A) safely swaps out the contents of the reference object
+guard    - (ref(x) [A] guard -- lock(ref(x)) x A unlock(ref(x))) locks a reference, evaluates some code over the referred object, then unlocks the reference again
+signal   - (ref(x) -- ref(x)) signals 1 thread waiting on ref(x) (if any)
+broadcast - (ref(x) -- ref(x)) signals all threads waiting on ref(x) (if any)
+wait     - (ref(x) -- ref(x)) waits for a thread to signal on ref(x)
+guard.sig - (ref(x) [A] guard -- lock(ref(x)) x A unlock(ref(x))) locks ref, evals code over value, signals, unlocks
+guard.waitwhile - (ref(x) [testwait] [postwait] -- ref(x)) lock, while (testwait true) [unlock-wait-lock, postwait, unlock]
+

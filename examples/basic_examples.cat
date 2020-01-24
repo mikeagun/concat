@@ -1,0 +1,171 @@
+#Copyright (C) 2020 D. Michael Agun
+#
+#Licensed under the Apache License, Version 2.0 (the "License");
+#you may not use this file except in compliance with the License.
+#You may obtain a copy of the License at
+#
+#http://www.apache.org/licenses/LICENSE-2.0
+#
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+
+#This script includes solutions to various simple programming problems
+
+() #this will be our list of programs
+
+#=== Print Hello World ===
+[
+"Hello World" print
+] \hello def
+
+( "Print Hello" \hello ) swap rpush
+
+
+
+#=== Greet user ===
+[
+"What is your name? " print_
+
+stdin.readline 0 ge [
+  "Hello " print_ print #print Hello then input from user
+] if
+] \greet1 def
+
+( "Greeting" \greet1 ) swap rpush
+
+
+
+#=== Greet only Alice or Bob ===
+[
+"What is your name? " print_
+
+  stdin.readline 0 < [ "bad input" print quit ] if
+#check if alice or bob (and select either greeting or go-away)
+    trim dup
+    [ "Alice" eq ] [ "Bob" eq ] bi or
+    "Hello " "Go away " ifelse
+#print message
+print_ print
+] \greet2 def
+
+( "Greet Alice or Bob" \greet2 ) swap rpush
+
+
+
+#=== Sum 1 through N ===
+[
+"Pick a number: " print_
+  stdin.readline 0 < [ "bad input" print quit ] if
+  parsenum
+
+  dup dup [ dec dup 0 > ] [ #| n sum i
+    \+ sip                  # add i to sum (keeping i on top)
+  ] while                   # add all i from n-1 to 1 to sum
+  pop                       # pop i
+
+  "Sum of 1 through " print_ swap print_
+  " is " print_ print
+] \math1 def
+
+( "Sum 1 through N" \math1 ) swap rpush
+
+
+
+#=== Sum multiples of 3 or 5 from 1 through N ===
+[
+"Pick a number: " print_
+  stdin.readline 0 < [ "bad input" print quit ] if
+  parsenum
+
+  0 dup2 [ dup 3 ge ] [ #| n sum i
+    dup [ 3% ] [ 5% ] bi and not # if divisible by 3 or 5
+    [\+ sip] if
+    dec
+  ] while
+  pop
+
+"Sum of multiples of 3&5 from 1 to " print_ swap print_
+" is " print_ print
+] \math2 def
+
+( "Sum multiples of 3&5 from 1 through N" \math2 ) swap rpush
+
+
+#=== Choose sum or product ===
+[
+  "Pick a number: " print_
+  stdin.readline 0 < [ "bad input" print quit ] if
+  parsenum
+
+  "Choose 'sum' or 'product': " print_
+  stdin.readline 0 < [ "bad input" print quit ] if
+  trim
+
+  [ "sum" eq ] [ "product" eq ] bi
+  dup2 or
+  [
+    [        #if input=="sum"
+      dup dup [ dec dup 0 > ] [ #| n sum i
+        \+ sip                  # add i to sum
+      ] while                   # add all i from n-1 to 1 to sum
+      pop                       # pop i
+
+      "Sum of 1 through " print_ swap print_
+      " is " print_ print
+    ] [      #if input=="product"
+      dup dup [ dec dup 1 > ] [ #| n prod i
+        \* sip                  # mul i into prod
+      ] while                   # add all i from n-1 to 1 to prod
+      pop                       # pop i
+
+      "Product of 1 through " print_ swap print_
+      " is " print_ print
+    ] ifelse
+  ] [
+    "Invalid input. Should have been 'sum' or 'product' (without the quotes)" print
+    pop pop #pop "sum"==input and N
+  ] ifelse
+] \math3 def
+
+( "Sum or Product" \math3 ) swap rpush
+
+
+# === Multiplication Table ===
+[ \tostring dip dup2 size - [ " " print_ ] times print_ ] \printn_ def #print value left-padded to n chars
+[
+  12 # print multiplication table up to 12
+  #We will first generate a list of 1-12, then use that for all our iterations
+  () dup2 dup [ [ swap lpush ] sip dec ] times pop
+  "   " print_ dup [ 4 printn_ ] each "" print
+  dup [
+    dup 2 printn_ ":" print_
+    dup2 [
+      dup2 * 4 printn_
+    ] each
+    "" print
+    pop
+  ] each
+] \table def
+( "Multiplication table" \table ) swap rpush
+
+( "Quit" \quit ) swap rpush
+
+0 dup2 [
+  [ inc dup print_ ] dip ": " print_ first print #print counter then program name
+] each
+pop #pop counter
+
+[ "Choose a program number: " print_
+stdin.readline 0 ge [tryparsenum dup isnum] [0] ifelse
+] [ #| (proglist) choice
+    dup 0 >                   #choice > 0
+  dup3 size dup3 ge and       # AND numprogs >= choice
+  [ 
+    dnth second dip
+  ] [ 
+    "Bad program number. Try again." print
+  ] ifelse
+] while

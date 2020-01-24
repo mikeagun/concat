@@ -1,0 +1,151 @@
+#Copyright (C) 2020 D. Michael Agun
+#
+#Licensed under the Apache License, Version 2.0 (the "License");
+#you may not use this file except in compliance with the License.
+#You may obtain a copy of the License at
+#
+#http://www.apache.org/licenses/LICENSE-2.0
+#
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+
+# Library for creating named data structures with creation, accessor, and mutator methods
+# - a struct is just a list of elements, where a set of words is defined to provide named access to each element
+# - we cache each getters/setters/mutators for reuse across structs (just with a different name)
+#   - getters/setters/mutators are just words which operate on specific list elements (doesn't matter what the struct's purpose is)
+#   - copies of lists are by reference, so only one copy of each positional getter/setter/mutator is created and the rest are references
+# - we use getdef to get direct access to the native operations to skip the dictionary lookup
+# - there is also a simple "class" which has a .scope word which runs code in a class-specific scope
+#   - predefined words in the scope for each of fields (so you don't need to include the 'type.' prefix inside scope
+#   - words defined inside the class scope are persisted but only available inside the scope
+#   - there isn't yet any concept of interitance, but one way that could be implemented is via chained scopes
+#     - add scope/type field to object, then interface functions can jump into the object's scope first to call the correct version
+
+(\dfirst \dsecond \dthird) \getdef map \getters_ def #list of accessors we have generated so far (so we clone instead of creating new accessors with same contents)
+
+#returns a val that evals to the nth element of a list (with only 1 integer and 1 native code object)
+[
+  getters_ dup size dup3 < [ #if we need new getter(s)
+    #| n getters_
+    \dnth getdef bury2
+    [ #| dnth n getters_
+      dup size dup3 <
+    ] [ #| dnth n getters_
+      dup3 quote [dup size inc] dip lpush swap rpush
+    ] while
+    dig2 pop #pop dnth
+    dup \getters_ def
+  ] if
+  swap nth #just return the nth element of the getters list
+] \getter def
+
+() \setters_ def #NOTE: we could also just prepend setters_ onto setter
+
+#returns a val that when evald overwrites the nth element of a list
+[
+  setters_ dup size dup3 < [ #if we need new getter(s)
+    #| n getters_
+    \setnth getdef bury2
+    [ #| nth n getters_
+      dup size dup3 <
+    ] [ #| nth n getters_
+      dup3 quote [dup size inc] dip lpush swap rpush
+    ] while
+    dig2 pop #pop nth
+    dup \setters_ def
+  ] if
+  swap nth #just return the nth element of the getters list
+] \setter def
+
+() \mutators_ def
+
+#returns a val that when evald maps the nth element of a list
+[
+  mutators_ dup size dup3 < [ #if we need new getter(s)
+    #| n getters_
+    \mapnth getdef bury2
+    [ #| nth n getters_
+      dup size dup3 <
+    ] [ #| nth n getters_
+      dup3 quote [dup size inc] dip lpush swap rpush
+    ] while
+    dig2 pop #pop nth
+    dup \mutators_ def
+  ] if
+  swap nth #just return the nth element of the getters list
+] \mutator def
+
+#returns a val that when evald collects the top n stack items into a list
+# - since we may not need all intermediate values, for constructors we define individual words instead of the list like for get/set/map
+[
+  "constructors_." dup2 cat toident dup defined [ #we've already defined a constructor for this many args
+    getdef
+  ] [ #we need to define a constructor that takes this many arguments
+    [
+      dup 4 le [ #for n<=4 list out lpushs, for n>4 use times loop
+        [()] \lpush getdef flip3 [dupd rpush] times popd
+      ] [
+        \lpush getdef quote \times getdef [] lpush lpush lpush () swap lpush
+      ] ifelse
+      dup
+    ] dip #dip under ident
+    def
+  ] ifelse
+] \constructor def
+
+#TODO: is .map a good name for the mutator, or should we choose something else?
+[                       #| n "structname" fieldname
+  "." swap cat cat      #| n "structname.fieldname"
+  dup2 getter swap dup [toident def] dip
+  dup2 setter swap dup ".set" cat swap [toident def] dip
+  swap mutator swap ".map" cat toident def
+] \structfield def
+
+[                       #| n fieldname
+  tostring
+  dup2 getter swap dup [toident def] dip
+  dup2 setter swap dup ".set" cat swap [toident def] dip
+  swap mutator swap ".map" cat toident def
+] \field def
+
+#simple struct
+#  - you specify a structname and list of field names, and a constructor plus getters,setters, and mutators for each field will be generated
+#  - getters on non-destructive (they push the val on top of the struct)
+[                       #| structname [ fieldname1 fieldname2 ...]
+  #first lets build the constructor
+  dup size constructor dup3 toident def #constructor is named after struct type
+  0 bury2
+  [                     #| n-1 structname fieldname
+    \inc dip2           #| n structname fieldname
+    \structfield sip3
+    pop
+  ] each #add accessor methods
+  pop #pop counter structname
+  pop #pop counter
+] \declare_struct def
+
+#saves a new scope (using 1 arg) and returns a scoped-evaluation function for the scope
+# - each class gets a .scope method where all definitions are local to the class (but shared acroess instances)
+[
+  savescope [swap usescope_] [getdef] map lpush
+] \savescopeeval def
+
+[                      #| classname [ fields... ] [private]
+  \tostring dip2
+  [ 0 dup3 [ \inc dip \field sip2 pop ] each pop eval ] savescopeeval
+  dup3 ".scope" cat toident
+  def
+  #first lets build the constructor
+  dup size constructor dup3 toident def #constructor is named after struct type
+  0 bury2
+  [                     #| n-1 structname fieldname
+    \inc dip2           #| n structname fieldname
+    \structfield sip3
+    pop
+  ] each #add accessor methods
+  pop #pop counter structname
+  pop #pop counter
+] \declare_class def

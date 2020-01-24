@@ -1,0 +1,126 @@
+#Copyright (C) 2020 D. Michael Agun
+#
+#Licensed under the Apache License, Version 2.0 (the "License");
+#you may not use this file except in compliance with the License.
+#You may obtain a copy of the License at
+#
+#http://www.apache.org/licenses/LICENSE-2.0
+#
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+
+#linrec
+# - linear recursion pattern
+#   - check for base condition (and eval base if we have hit that), if not base run some code, recurse, and run some more code
+# - fixed wstack depth (at least from linrec)
+#   - iteratively runs cond base1 until base case (keeping count of depth), then runs base and rec2 once for each level
+[                #| [cond] [base] [rec1] [rec2]
+  dig2           #| [cond] [rec1] [rec2] [base]
+  [
+    [          #| [cond] [rec1] [L] count
+      4 dupn
+      4 dipn
+      4 dign     #| [cond] [rec1] [L] count cond
+      not
+      [ inc dup3 4 dipn dup2 eval ] if #inc counter, eval rec1, recurse
+    ] 0          #| [cond] [rec1] [L] count 
+    dup2 eval    #| rec1 rec1... [cond] [rec1] [L] count
+    [pop pop pop] dip  #| rec1 rec1... count -- pop cond,rec1,L (just keep count)
+  ] dip2         #| rec1 rec1... count [rec2] [base]
+  dip2           #| rec1 rec1... base count [rec2]  -- eval base case
+  times          #| rec1 rec1... base rec2 rec2... -- now eval the tail of the recursive body n times (once for each level of recursion)
+] \linrec def
+
+#linrec
+# - this was my first implementation of linrec
+# - the main issue to note is that the rec2 part of the recursive call is accumulated on the work stack as a sequence of [dup dip] words
+#   - if there are n levels of recursion, there are n copies of [dup dip] on the work stack after the base case. This works, but if we already know there will be n calls, we can just keep a counter and then use times
+#   - for shallow recursion this could be a tiny bit faster (no loop), but for deep recursion we don't want to be adding to the work stack for each level of recursion where possible
+[                #| [cond] [base] [rec1] [rec2]
+  [              #| rec1... [cond] [base] [rec1] [rec2] [L]
+    5 dupn
+    5 dipn
+    5 dign       #| [cond] [base] [rec1] [rec2] [L] cond
+    [            # base case
+      pop popd   #| [cond] [base] [rec2]
+      flip3 pop  #| [rec2] [base]
+      dip        #| base [rec2]
+    ] [
+      dup3       #| [cond] [base] [rec1] [rec2] [L] [rec1]
+      5 dipn     #| rec1 [cond] [base] [rec1] [rec2] [L]
+      dup eval   # recursive call
+      dup dip    # rec2 called after recursive call
+    ] ifelse
+  ] dup eval
+  pop
+] \linrec1 def
+
+#WIP -- genrec should package everything up (including args and genrec), and pass package to rec2
+[                #| [cond] [base] [rec1] [rec2]
+  dig2           #| [cond] [rec1] [rec2] [base]
+  4 wrapn #| ( [cond][rec1][rec2][base] )
+  [
+    expand             #| [ ([cond][rec1][rec2][base]) L ] [cond] [rec1] [rec2] [base]
+    
+
+
+  #  [          #| [cond] [rec1] [L] count
+  #    4 dupn
+  #    4 dipn
+  #    4 dign     #| [cond] [rec1] [L] count cond
+  #    not
+  #    [ inc dup3 4 dipn dup2 eval ] if #inc counter, eval rec1, recurse
+  #  ] 0          #| [cond] [rec1] [L] count 
+  #  dup2 eval    #| rec1 rec1... [cond] [rec1] [L] count
+  #  [pop pop pop] dip  #| rec1 rec1... count -- pop cond,rec1,L (just keep count)
+  #  dip2           #| rec1 rec1... base count [rec2]  -- eval base case
+  #  times          #| rec1 rec1... base rec2 rec2... -- now eval the tail of the recursive body n times (once for each level of recursion)
+  ] lpush        #| [ ([cond][rec1][rec2][base]) L ]
+  dup eval
+] \genrec def
+
+#tailrec - linrec with only rec1,base -- NOTE: this is equivalent to [cond] [rec1] while base
+[                #| [cond] [base] [rec1]
+  swap           #| [cond] [rec1] [base]
+  [
+    [            #| [cond] [rec1] [L]
+      dup3
+      dip3
+      dig3       #| [cond] [rec1] [L] cond
+      not
+      [ dup2 dip3 dup eval ] if #eval rec1, recurse
+    ]            #| [cond] [rec1] [L] 
+    dup eval     #| rec1 rec1... [cond] [rec1] [L]
+    pop pop pop  #| rec1 rec1...
+  ] dip eval     #| rec1 rec1... base
+] \tailrec def
+
+
+#binrec
+# - binary recursion pattern
+# - check for base condition (and eval base if we have hit that), if not base run some code to produce 2 vals to recurse on (so it recurses twice), then run some more code after the recursion
+[                #| [cond] [base] [split] [merge]
+  [              #| ... [cond] [base] [split] [merge] [L]
+    5 dupn
+    5 dipn
+    5 dign       #| [cond] [base] [split] [merge] [L] cond
+    [            # base case
+      4 dupn
+      5 dipn     # base [cond] [base] [split] [merge] [L]
+    ] [
+      dup3       #| [cond] [base] [split] [merge] [L] [split]
+      5 dipn     #| (split1) (split2) [cond] [base] [split] [merge] [L]
+      5 dign     #| (split1) [cond] [base] [split] [merge] [L] (split2)
+      dup2 dip   #| child1 [cond] [base] [split] [merge] [L] (split2)
+      5 buryn
+      dup eval   #| child1 child2 [cond] [base] [split] [merge] [L] 
+      dup2
+      5 dipn     #| child1 child2 merge [cond] [base] [split] [merge] [L]
+    ] ifelse
+  ] dup eval
+  pop pop pop pop pop
+] \binrec def
+

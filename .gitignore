@@ -1,0 +1,6 @@
+.ycm_extra_conf.py*
+concat
+concat-debug
+cscope.*
+tags
+valgrind.out
