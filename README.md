@@ -215,7 +215,7 @@ One of the goals for this project is a cross-platform bytecode supporting resour
 The language is stable right now (less some additional, possibly breaking, changes on the way to 1.0)
 - virtual machine using switch+function dispatch with type+union struct containing val data
     - I've been using concat for several years now as my (advanced) desktop calculator and for light scripting
-    - existing VM code is stable (less sweeping refactors of the last few weeks), but will be obsoleted when new implementation finished
+    - existing VM code is stable, but will be obsoleted when new implementation finished (it's mostly finished, but still needs to be cleaned up)
 - sufficient and useful set of combinators
 - comprehensive printf
 - threading and thread synchronization primitives
@@ -228,30 +228,32 @@ The language is stable right now (less some additional, possibly breaking, chang
         - e.g. we don't have breakpoints, but you can write a one-liner to step through a program until a condition is met
 
 
-My two main focuses right now are:
+
+
+
+
+# Where is it going?
+
+My two next focuses right now are:
 - cleaning up, refactoring, documenting my existing code and moving it over to the GitHub repo
   - master branch code is fully functional (using old implementation)
   - lots of examples in examples/ directory
+  - I have the new bytecode VM almost completely functional, but it needs some cleanup and more thorough testing
 - complete rewrite of core VM
-  - bytecode branch has some of the WIP code towards this, expect to finish over the next couple of weeks
-  - same language, faster implementation (should also be able to get it smaller)
+  - bytecode branch has some of the old WIP code towards this, but I'll commit the new code after some cleanup
+  - same language, faster implementation (should also be able to get it much smaller)
 
 Concat has been a free-time/need-a-break-time project for the last few years so has been implemented in bits and pieces.
-I'm right now going through the process of cleaning up and documenting existing work and moving everything to the GitHub repo.
-With that, some sweeping refactors have happened in the last couple weeks to normalize/standardize interfaces.
-I'm sure some bugs have popped up as test coverage has also gone down with the major changes --
-after current VM rewrite, high-priority goal is to add thorough tests back and add more example programs (which also serve as tests).
+I'm sure some bugs have popped up as test coverage has also gone down with the major changes in the most recent commits --
+after current VM rewrite, high-priority goal is to add thorough tests back and add more example programs (which also serve as tests for `make test`).
 
 
 My main focus right now is rewriting the core VM (as a token-threaded-bytecode VM) to resolve the memory overhead and performance bottlenecks in the struct-based function-dispatch VM concat uses right now.
   - my earlier profiling showed I was spending too much time doing trivial stack shuffling, and of course the struct-val implementation has a high overhead for the basic numeric types
   - the new implementation uses opcode + void pointer sized union for platform-dependent val (fixed size, only 1 byte wasted for numbers, valid bytecode)
-  - Expect more updates in that direction over the next couple of weeks (I'm actively completing the tests/docs/implementation)
 
 
-
-# Where is it going?
-The short term goals for concat are:
+The next goals for concat are:
 1. Finish the new VM core (cleaner/more maintainable/smaller/faster)
   - token-threaded bytecode VM instead of stack of heavy structs using function-dispatch (was easy to debug, but lots of overhead) *WIP*
   - macros to help avoid repitition of the important lists (opcodes, exceptions, type handlers) *DONE*
@@ -265,7 +267,7 @@ The short term goals for concat are:
   - also review instruction set for round of (if needed) breaking changes
 4. Document all implementation rules *see README.md in src*
 5. proper REPL for interactive coding
-6. Debugging tools for new VM (old debugging tools still work, but out-of-date)
+6. Improve default implementation of debugging tools
   - also look into compile/debug-time checks of stack comments
 7. Complete AVR implementation of core language (hopefully just macro switches to disable extras)
 8. Standardize core opcode set
@@ -275,7 +277,7 @@ The short term goals for concat are:
 
 # License
 
-Copyright (C) 2020 D. Michael Agun
+Copyright (C) 2023 D. Michael Agun
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
