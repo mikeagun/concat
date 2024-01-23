@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -16,10 +16,19 @@
 #define __HELPERS_H__ 1
 
 #include <stddef.h>
+
+//======= refcount functions ========
+// - these are used to atomically increment, decrement, and check refcounts
+//
 //#define refcount_inc(refcount) (++(refcount))
 //#define refcount_dec(refcount) (--(refcount))
+//#define refcount_singleton(refcount) (1 == (refcount))
+//
+//TODO: replace these with the newer atomic_load_n, atomic_add_fetch, atomic_sub_fetch
 #define refcount_inc(refcount) __sync_add_and_fetch(&(refcount),1)
 #define refcount_dec(refcount) __sync_sub_and_fetch(&(refcount),1)
+//if singleton returns true then we are currently looking at the only copy, so we can safely modify it in-place
+#define refcount_singleton(refcount) (1 == __sync_fetch_and_add(&(refcount),0))
 
 #define ASSERT_CONCAT_(a, b) a##b
 #define ASSERT_CONCAT(a, b) ASSERT_CONCAT_(a, b)

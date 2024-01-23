@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -16,36 +16,69 @@
 #define _VAL_FILE_H_ 1
 
 #include "val.h"
-#include "vm.h"
-
-#define FILE_ERR -1
-#define FILE_EOF -2
+//#include "vm.h"
 
 //TODO: come up with buffer/block manager for files
+//TODO: supprt threadsafe file io
 #define FILE_BUFLEN 500
 char FILE_BUF[FILE_BUFLEN];
 
-val_t* val_file_init_stdin(val_t *val);
-val_t* val_file_init_stdout(val_t *val);
-val_t* val_file_init_stderr(val_t *val);
-err_t val_file_init(val_t *val, const char *fname, const char *mode);
+extern valstruct_t _val_file_stdin;
+extern valstruct_t _val_file_stdout;
+extern valstruct_t _val_file_stderr;
 
-err_t val_file_destroy(val_t *val);
-err_t val_file_clone(val_t *ret, val_t *orig);
+err_t concat_file_init();
 
-int val_file_fprintf(val_t *val, FILE *file, const fmt_t *fmt);
-int val_file_sprintf(val_t *val, val_t *buf, const fmt_t *fmt);
-void val_file_init_handlers(struct type_handlers *h);
+val_t val_file_stdin_ref();
+val_t val_file_stdout_ref();
+val_t val_file_stderr_ref();
 
+valstruct_t * _val_file_stdin_ref();
+valstruct_t * _val_file_stdout_ref();
+valstruct_t * _val_file_stderr_ref();
+
+
+int val_file_init(val_t *val, const char *fname, const char *mode);
+
+int val_file_print(val_t val);
+void _val_file_destroy(valstruct_t *f);
+err_t _val_file_clone(val_t *ret, valstruct_t *orig);
+
+#ifdef DEBUG_FILENAME
 const char *val_file_fname(val_t *file);
+#endif
 
-int val_file_readline_(val_t *file, char *buffer, int buflen);
-err_t val_file_readline(val_t *file, val_t *line);
-int val_file_read(val_t *file, val_t *buf, unsigned int nbytes);
+FILE* _val_file_f(valstruct_t *file);
 
-err_t val_file_writeline(val_t *file, val_t *str);
-err_t val_file_write(val_t *file, val_t *str);
+//close file
+int _val_file_close(valstruct_t *f);
 
-err_t val_file_close(val_t *file);
+int _val_file_readline(valstruct_t *f, valstruct_t *buf);
+int _val_file_read(valstruct_t *f, valstruct_t *buf, int nbytes);
+int _val_file_write(valstruct_t *f, valstruct_t *buf);
+
+err_t _val_file_seek(valstruct_t *f, long offset, int whence);
+long _val_file_pos(valstruct_t *f);
+
+//read one line from file
+int _val_file_readline_(valstruct_t *f, char *buffer, int buflen);
+
+//read n bytes from file
+int _val_file_read_(valstruct_t *f, char *buffer, int nbytes);
+
+//write n bytes to file
+int _val_file_write_(valstruct_t *f, const char *buffer, int nbytes);
+
+
+//int val_file_readline(val_t *file, char *buffer, int buflen);
+//int val_file_readline_val(val_t *file, val_t *line);
+//int val_file_read_val(val_t *file, val_t *str, unsigned int nbytes);
+//int val_file_writeline_val(val_t *file, val_t *str);
+//int val_file_write_val(val_t *file, val_t *str);
+//int _val_file_readline_val(val_t *file, val_t *line);
+//int _val_file_close(valstruct_t *file);
+
+int val_file_fprintf(valstruct_t *v,FILE *file, const struct printf_fmt *fmt);
+int val_file_sprintf(valstruct_t *v,valstruct_t *buf, const struct printf_fmt *fmt);
 
 #endif

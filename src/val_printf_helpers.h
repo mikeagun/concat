@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -12,17 +12,19 @@
 //See the License for the specific language governing permissions and
 //limitations under the License.
 
-#ifndef __OPS_VM_H__
-#define __OPS_VM_H__ 1
-#include "vmstate.h"
+#ifndef __VAL_PRINTF_HELPERS__
+#define __VAL_PRINTF_HELPERS__ 1
 
-err_t ops_vm_init(vm_t *vm);
+#include "val.h"
+#include "val_printf_fmt.h"
+#include <stdio.h>
 
-//create VM val
-vm_op_handler _op_vm;      // vm ( (A...) (B...) -- vm{ A <|> B } )
-vm_op_handler _op_thread;  // vm ( (A...) (B...) -- vm{ A <|> B } ) //starts vm in new thread
-vm_op_handler _op_thread_wait;  // thread.wait ( {vm} -- {vm} ) //wait for thread to finish
-vm_op_handler _op_vm_state; // vm.state ( {vm} -- {vm} ) //prints vm state
+void val_printf_clear(struct printf_fmt *fmt);
+int val_fprintf_(val_t val, FILE *file, const struct printf_fmt *fmt);
+int val_sprintf_(val_t val, valstruct_t *buf, const struct printf_fmt *fmt);
 
-vm_op_handler _op_vm_mapstack; //{vm: 
+val_t* val_arglist_get(valstruct_t *list, int isstack, int i);
+//int val_arglist_pop(valstruct_t *list, int isstack, val_t *el);
+int val_arglist_drop(valstruct_t *list, int isstack);
+
 #endif

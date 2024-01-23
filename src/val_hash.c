@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -14,132 +14,261 @@
 
 #include "val_hash.h"
 #include "val_hash_internal.h"
-#include "val_stack.h"
-#include "val_printf.h"
-#include "vm_err.h"
+#include "val_string.h"
+#include "defpool.h"
+#include "helpers.h"
 
-int val_isdict(val_t *val) {
-  if (!val_islist(val)) return 0;
-  else if (val_list_empty(val)) return 0;
+#include <stdlib.h>
+#include <string.h>
+#include <valgrind/helgrind.h>
 
+inline unsigned int hash_bucket(const uint32_t khash, const unsigned int nbuckets) { return khash & (nbuckets-1); } //currently assumes nbuckets is a power of 2
+//inline unsigned int hash_bucket(const uint32_t khash, const unsigned int nbuckets) { return khash % nbuckets; } //doesn't assume nbuckets is a power of 2
+
+struct hashtable* alloc_hashtable() {
+  unsigned int nbuckets = DEFAULT_HASH_BUCKETS;
+  struct hashtable *h;
+  if (!(h = malloc(sizeof(struct hashtable) + (sizeof(struct hashentry*) * nbuckets)))) return NULL;
+  memset(h->buckets,0,sizeof(struct hashentry*) * nbuckets); //zero bucket pointers
+  h->nbuckets = nbuckets;
+  h->refcount=1;
+  h->size = 0;
+  return h;
+}
+void release_hashtable(struct hashtable *h) {
+  if (0 == (refcount_dec(h->refcount))) {
+    ANNOTATE_HAPPENS_AFTER(h);
+    ANNOTATE_HAPPENS_BEFORE_FORGET_ALL(h);
+    unsigned int i;
+    for(i=0;i<h->nbuckets;++i) {
+      _hashchain_dispose(h->buckets[i]);
+    }
+    free(h);
+  } else {
+    ANNOTATE_HAPPENS_BEFORE(h);
+  }
+}
+
+err_t hash_clone(struct hashtable **ret, struct hashtable *orig) {
+  *ret = alloc_hashtable();
   unsigned int i;
-  for(i = 0; i < val_stack_len(val); ++i) {
-    if (!val_ishash(_val_stack_get(val,i))) return 0;
-  }
-  return 1;
-}
-
-err_t val_hash_init(val_t *val, struct hashtable *next) {
-  struct hashtable *hash;
-  throw_if(ERR_MALLOC,!(hash = alloc_hashtable(DEFAULT_HASH_BUCKETS,next)));
-  cleanup_throw_if(ERR_MALLOC,dispose_hashtable(hash),!(val->val.hash = malloc(sizeof(struct val_hash_struct))));
-  val->type = TYPE_HASH;
-  val->val.hash->refcount=1;
-  val->val.hash->depth=1;
-  val->val.hash->hash=hash;
-  return 0;
-}
-
-err_t val_hash_init_(val_t *val, struct hashtable *hash) {
-  throw_if(ERR_MALLOC,!(val->val.hash = malloc(sizeof(struct val_hash_struct))));
-  val->type = TYPE_HASH;
-  val->val.hash->refcount=1;
-  val->val.hash->depth=1;
-  val->val.hash->hash = hash;
-  return 0;
-}
-
-err_t val_dict_init(val_t *dict) {
-  val_stack_init(dict);
-  return val_dict_pushnew(dict);
-}
-err_t val_dict_destroy(val_t *dict) {
-  argcheck_r(val_isdict(dict));
-  while(!val_stack_empty(dict)) val_dict_pop(dict,NULL);
-  return val_destroy(dict);
-}
-err_t val_dict_pushnew(val_t *dict) {
-  err_t r;
-  val_t t;
-  if ((r = val_hash_init(&t,NULL))) return r;
-  return val_dict_push(dict,&t);
-}
-err_t val_dict_push(val_t *dict, val_t *hash) {
-  argcheck_r(val_islist(dict) && val_ishash(hash));
-  err_t r;
-  if (val_stack_empty(dict)) { r = 0; val_hash_clearnext(hash); }
-  else r = val_hash_setnext(hash,val_stack_top(dict));
-  if (r) return r;
-
-  if ((r = val_stack_push(dict,hash))) return r;
-  return 0;
-}
-err_t val_dict_pop(val_t *dict, val_t *hash) {
-  argcheck_r(val_isdict(dict));
-  val_t top;
-  err_t r;
-  if ((r = val_stack_pop(dict,&top))) return r;
-  val_hash_clearnext(&top);
-  if (hash) val_move(hash,&top);
-  else val_destroy(&top);
-  return 0;
-}
-
-err_t val_dict_pop_to1(val_t *dict) { //pop all but bottom scope
-  argcheck_r(val_isdict(dict));
-  err_t r;
-  while(val_stack_len(dict) > 1) {
-    if ((r = val_dict_pop(dict,NULL))) return r;
+  struct hashentry *e;
+  for(i=0;i<orig->nbuckets;++i) {
+    if ((e = orig->buckets[i])) {
+      struct hashentry *re;
+      if (!(re = alloc_hashentry_clone(&e->k,e->v,e->khash,NULL))) goto err_malloc;
+      (*ret)->buckets[i] = re;
+      for(e=e->next; e; e=e->next) {
+        if (!(re->next = alloc_hashentry_clone(&e->k,e->v,e->khash,NULL))) goto err_malloc;
+        re = re->next;
+      }
+    }
   }
   return 0;
-}
-
-struct hashtable* val_dict_h(val_t *dict) {
-  argcheck(val_islist(dict) && (val_stack_empty(dict) || val_ishash(val_stack_top(dict))));
-  if (val_stack_empty(dict)) return NULL;
-  else return val_stack_top(dict)->val.hash->hash;
-}
-
-err_t val_hash_setnext(val_t *hash, val_t *next) {
-  argcheck_r(val_ishash(hash) && val_ishash(next));
-  int depth=hash->val.hash->depth;
-  struct hashtable* tail=hash->val.hash->hash;
-  while(--depth) tail=tail->next;
-  fatal_if(ERR_FATAL,tail->next); //can only set when null
-  tail->next = next->val.hash->hash;
-  return 0;
-}
-void val_hash_clearnext(val_t *hash) {
-  argcheck(val_ishash(hash));
-  int depth=hash->val.hash->depth;
-  struct hashtable* tail=hash->val.hash->hash;
-  while(--depth) tail=tail->next;
-  tail->next = NULL;
+err_malloc:
+  return _throw(ERR_MALLOC);
 }
 
 
-void val_hash_init_handlers(struct type_handlers *h) {
-  h->destroy = val_hash_destroy;
-  h->clone = val_hash_clone;
-  h->fprintf = val_hash_fprintf;
-  h->sprintf = val_hash_sprintf;
+
+//we use a pool for hashentries, since we tend to need a lot of these when we need a few, and good-practice is that you aren't freeing many of these anyways
+//TODO: needs a threadsafe / thread-local pool allocator
+//DEFINE_SIMPLE_POOL(struct hashentry,4096,_hashentry_alloc,_hashentry_free)
+DEFINE_NO_POOL(struct hashentry,4096,_hashentry_alloc,_hashentry_free)
+
+void _hashentry_release(struct hashentry *e) {
+  _val_str_destroy_(&e->k);
+  val_destroy(e->v);
+  _hashentry_free(e);
 }
-err_t val_hash_clone(val_t *ret, val_t *orig) {
-  *ret = *orig;
-  refcount_inc(ret->val.hash->refcount);
-  return 0;
-}
-err_t val_hash_destroy(val_t *val) {
-  if (0 == refcount_dec(val->val.hash->refcount)) {
-    while(val->val.hash->depth--) val->val.hash->hash = dispose_hashtable(val->val.hash->hash);
-    free(val->val.hash);
+void _hashchain_dispose(struct hashentry *e) {
+  while(e) { //loop through entries, freeing each one
+    struct hashentry *n=e->next;
+    _hashentry_release(e);
+    e=n;
   }
-  val->type = VAL_INVALID;
+}
+
+struct hashentry* alloc_hashentry(valstruct_t *key, val_t value, uint32_t khash, struct hashentry *next) {
+  struct hashentry *e;
+  if (!(e = _hashentry_alloc())) return NULL;
+  e->next  = next;
+  e->khash = khash;
+  e->k     = *key;
+  _valstruct_release(key);
+  e->v     = value;
+  return e;
+}
+
+struct hashentry* alloc_hashentry_clone(valstruct_t *key, val_t value, uint32_t khash, struct hashentry *next) {
+  struct hashentry *e;
+  if (!(e = _hashentry_alloc())) return NULL;
+  val_t vcln;
+  int r;
+  _val_str_clone(&e->k,key);
+  if ((r = val_clone(&vcln,value))) goto out_kentry;
+  e->next  = next;
+  e->khash = khash;
+  e->v     = vcln;
+  return e;
+out_kentry:
+  _val_str_destroy_(&e->k);
+  _hashentry_free(e);
+  return NULL;
+}
+
+
+val_t hash_get(struct hashtable *h, valstruct_t *key) {
+  uint32_t khash=_val_str_hash32(key);
+  struct hashentry *e;
+  for (e = h->buckets[hash_bucket(khash,h->nbuckets)]; e; e=e->next) { //loop through bucket list
+    if (e->khash==khash && _val_str_eq(key,&e->k)) { //found it
+      return e->v;
+    } else if (khash<e->khash || (e->khash==khash && _val_str_compare(key,&e->k)<0)) { //past it. search failed
+      break;
+    }
+  }
+  return VAL_NULL;
+}
+val_t* _hash_get(struct hashtable *h, valstruct_t *key) {
+  uint32_t khash=_val_str_hash32(key);
+  struct hashentry *e;
+  for (e = h->buckets[hash_bucket(khash,h->nbuckets)]; e; e=e->next) { //loop through bucket list
+    if (e->khash==khash && _val_str_eq(key,&e->k)) { //found it
+      return &e->v;
+    } else if (khash<e->khash || (e->khash==khash && _val_str_compare(key,&e->k)<0)) { //past it. search failed
+      break;
+    }
+  }
+  return NULL;
+}
+
+val_t hash_get_(struct hashtable *h, const char *key, unsigned int len) {
+  uint32_t khash=_val_cstr_hash32(key,len);
+  struct hashentry *e;
+  for (e = h->buckets[hash_bucket(khash,h->nbuckets)]; e; e=e->next) { //loop through bucket list
+    if (e->khash==khash && !_val_str_cstr_compare(&e->k,key,len)) { //found it
+      return e->v;
+    } else if (khash<e->khash || (e->khash==khash && _val_str_cstr_compare(&e->k,key,len)>0)) { //past it. search failed
+      break;
+    }
+  }
+  return VAL_NULL;
+}
+
+int hash_put(struct hashtable *h, valstruct_t *key, val_t value, int overwrite) {
+  uint32_t khash=_val_str_hash32(key);
+  struct hashentry *e;
+  e = h->buckets[hash_bucket(khash,h->nbuckets)];
+
+  if (!e || khash<e->khash || (khash==e->khash && _val_str_compare(key,&e->k) < 0)) { //no bucket list in this table, or our key goes first
+    struct hashentry *t;
+    if (!(t = alloc_hashentry(key,value,khash,e))) return -1;
+    h->buckets[hash_bucket(khash,h->nbuckets)] = t;
+    h->size++;
+    return 1;
+  } else if (e->khash==khash && _val_str_eq(key,&e->k)) { //found key at head of list
+    if (!overwrite) return 0;
+    _val_str_destroy(key);
+    val_destroy(e->v);
+    e->v = value;
+    return 2;
+  } else { //else, search for key in list
+    for(; e; e=e->next) { //scan bucket entries
+      if (e->next && e->next->khash==khash && _val_str_eq(key,&e->next->k)) { //found it
+        if (!overwrite) return 0;
+        _val_str_destroy(key);
+        val_destroy(e->next->v);
+        e->next->v = value;
+        return 2;
+      } else if (!e->next || khash<e->next->khash || (e->next->khash==khash && _val_str_compare(key,&e->next->k)<0)) { //past it (or this is the tail of the list). insert here
+        //now insert our k,v pair
+        struct hashentry *t;
+        if (!(t = alloc_hashentry(key,value,khash,e->next))) return -1;
+        e->next = t;
+        h->size++;
+        return 1;
+      }
+    }
+    return -1;
+  }
+}
+
+int hash_put_copy(struct hashtable *h, valstruct_t *key, val_t value, int overwrite) {
+  uint32_t khash=_val_str_hash32(key);
+  struct hashentry *e;
+  int r;
+  e = h->buckets[hash_bucket(khash,h->nbuckets)];
+
+  if (!e || khash<e->khash || (khash==e->khash && _val_str_compare(key,&e->k) < 0)) { //no bucket list in this table, or our key goes first
+    struct hashentry *t;
+    if (!(t = alloc_hashentry_clone(key,value,khash,e))) return -1;
+    h->buckets[hash_bucket(khash,h->nbuckets)] = t;
+    h->size++;
+    return 1;
+  } else if (e->khash==khash && _val_str_eq(key,&e->k)) { //found key at head of list
+    if (!overwrite) return 0;
+    val_destroy(e->v);
+    if ((r = val_clone(&e->v,value))) return r;
+    return 2;
+  } else { //else, search for key in list
+    for(; e; e=e->next) { //scan bucket entries
+      if (e->next && e->next->khash==khash && _val_str_eq(key,&e->next->k)) { //found it
+        if (!overwrite) return 0;
+        val_destroy(e->next->v);
+        if ((r = val_clone(&e->next->v,value))) return r;
+        return 2;
+      } else if (!e->next || khash<e->next->khash || (e->next->khash==khash && _val_str_compare(key,&e->next->k)<0)) { //past it (or this is the tail of the list). insert here
+        //now insert our k,v pair
+        struct hashentry *t;
+        if (!(t = alloc_hashentry_clone(key,value,khash,e->next))) return -1;
+        e->next = t;
+        h->size++;
+        return 1;
+      }
+    }
+    return -1;
+  }
+}
+
+int hash_delete(struct hashtable *h, valstruct_t *key) {
+  if (!h) return -1;
+  uint32_t khash=_val_str_hash32(key);
+  struct hashentry *e;
+
+  e = h->buckets[hash_bucket(khash,h->nbuckets)];
+  if (!e) { //no bucket list in this table
+    return 0;
+  } else if (e->khash==khash && _val_str_eq(key,&e->k)) { //found key at head of list
+    h->buckets[hash_bucket(khash,h->nbuckets)] = e->next;
+    h->size--;
+    _hashentry_release(e);
+    return 1;
+  } else { //else, search for key in list
+    for(; e->next; e=e->next) { //scan bucket entries
+      if (e->next->khash==khash && _val_str_eq(key,&e->next->k)) { //found it
+        struct hashentry *t=e->next;
+        e->next=t->next;
+        h->size--;
+        _hashentry_release(t);
+        return 1;
+      } else if (khash<e->next->khash || (e->next->khash==khash && _val_str_compare(key,&e->next->k)<0)) { //past it. move on to parent scope
+        break;
+      }
+    }
+  }
+
   return 0;
 }
-int val_hash_fprintf(val_t *val, FILE *file, const fmt_t *fmt) {
-  return val_fprint_cstr(file,"{hash}");
-}
-int val_hash_sprintf(val_t *val, val_t *buf, const fmt_t *fmt) {
-  return val_sprint_cstr(buf,"{hash}");
+
+int hash_visit(struct hashtable *h, hash_visitor *visit, void *arg) {
+  unsigned int i;
+  struct hashentry *e;
+  int r=0;
+  for(i=0;i<h->nbuckets;++i) {
+    for(e=h->buckets[i]; e; e=e->next) {
+      if ((r=visit(e,arg)) < 0) return r;
+    }
+  }
+  return r;
 }

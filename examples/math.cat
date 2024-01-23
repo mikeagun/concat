@@ -1,0 +1,31 @@
+#Copyright (C) 2024 D. Michael Agun
+#
+#Licensed under the Apache License, Version 2.0 (the "License");
+#you may not use this file except in compliance with the License.
+#You may obtain a copy of the License at
+#
+#http://www.apache.org/licenses/LICENSE-2.0
+#
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+
+#various math examples
+
+#Different versions of the factorial function
+#fac1 - standard recursive implementation
+#fac2 - anonymous recursive implementation
+#fac3 - anonymous recursive implementation (which limits stack depth)
+#fac4 - iterative version using times
+#fac5 - iterative version using while loop
+#
+[ dup 0 = \inc [ dup dec fac1 * ] ifelse ] \fac1 def #recursive definition of factorial (O(n) work stack, O(n) stack)
+[ [dup 0 =] \inc [dup dec] [*] linrec ] \fac2 def #factorial using anonymous linear recursion (O(1) work stack depth)
+[ dup 0 = \inc [ dup [dup 3 <] \pop [dec dup \* dip] [] linrec ] ifelse ] \fac3 def #recursive version with O(1) work stack depth and O(n) stack depth
+[ dup 0 = \inc [ dup dup dec [ dec dup \* dip ] times pop ] ifelse ] \fac4 def #iterative version using times
+[ dup 0 = \inc [ dup [dup 2 >] [ dec dup \* dip ] while pop ] ifelse ] \fac5 def #iterative version using while
+
+[ dup 1 > [ dec dup dec fib1 swap fib1 + ] if_ ] \fib1 def #recursive fibonacci sequence definition
+[ [ dup 1 le ] [] [ dec dup dec ] \+ binrec ] \fib2 def #fibonacci sequence calculated with anonymous binary recursion

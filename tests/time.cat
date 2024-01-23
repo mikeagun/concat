@@ -1,4 +1,4 @@
-#Copyright (C) 2020 D. Michael Agun
+#Copyright (C) 2024 D. Michael Agun
 #
 #Licensed under the Apache License, Version 2.0 (the "License");
 #you may not use this file except in compliance with the License.
@@ -11,6 +11,7 @@
 #WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #See the License for the specific language governing permissions and
 #limitations under the License.
+
 #time manipulation library
 
 #functions for extracting various time fields from a time represented in seconds
@@ -89,21 +90,21 @@
 ] \parsetime def
 
 #"1y"
-#  "in: " print_ dup print_code_
+#  "in: " print_ dup printV_
 #  parsetime
-#  "; time: " print_ dup print_code_
+#  "; time: " print_ dup printV_
 #  "; out: " print_ printtime
 #"1y1d"
-#  "in: " print_ dup print_code_
+#  "in: " print_ dup printV_
 #  parsetime
-#  "; time: " print_ dup print_code_
+#  "; time: " print_ dup printV_
 #  "; out: " print_ printtime
 
 #"1y"
 #[
-#  "in: " print_ dup print_code_
+#  "in: " print_ dup printV_
 #  parsetime
-#  "; time: " print_ dup print_code_
+#  "; time: " print_ dup printV_
 #  "; out: " print_ printtime
 #] dup
 #"1y1d"
@@ -114,9 +115,9 @@
 #"1y1d"
 #"1y"
 #[
-#  "in: " print_ dup print_code_
+#  "in: " print_ dup printV_
 #  parsetime
-#  "; time: " print_ dup print_code_
+#  "; time: " print_ dup printV_
 #  "; out: " print_ printtime
 #] dup
 #dip
@@ -126,9 +127,9 @@
 #  "1y"
 #  "1y1d"
 #) [
-#  "in: " print_ dup print_code_
+#  "in: " print_ dup printV_
 #  parsetime
-#  "; time: " print_ dup print_code_
+#  "; time: " print_ dup printV_
 #  "; out: " print_ printtime
 #] each
 
@@ -149,9 +150,9 @@
   "1y1d0:1:0"
   "1y 0:1:0"
 ) [
-  "in: " print_ dup print_code_
+  "in: " print_ dup printV_
   parsetime
-  "; time: " print_ dup print_code_
+  "; time: " print_ dup printV_
   "; out: " print_ printtime
 ] each
 5 minutes printtime

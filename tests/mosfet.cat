@@ -1,4 +1,4 @@
-#Copyright (C) 2020 D. Michael Agun
+#Copyright (C) 2024 D. Michael Agun
 #
 #Licensed under the Apache License, Version 2.0 (the "License");
 #you may not use this file except in compliance with the License.
@@ -11,6 +11,7 @@
 #WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #See the License for the specific language governing permissions and
 #limitations under the License.
+
 50 \current def  #define current as 50A
 [1.0*] \o def       #define o as an (identity) operator for Ohms units
 [0.001*] \mo def    #define mo as an operator that converts milliOhms to Ohms

@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -15,21 +15,25 @@
 #ifndef _VAL_VM_H_
 #define _VAL_VM_H_ 1
 
-#include "vmstate.h"
+#include "vm.h"
 
-int val_vm_finished(val_t *val);
+int val_vm_finished(valstruct_t *vm);
 
+valstruct_t* _val_vm_alloc();
+void _val_vm_free(valstruct_t *vm);
 err_t val_vm_init(val_t *val);
-err_t val_vm_init2(val_t *val,val_t *stack, val_t *work);
-err_t val_vm_init3(val_t *val,val_t *stack, val_t *work, val_t *dict);
+err_t val_vm_init2(val_t *val,valstruct_t *stack, valstruct_t *work);
+err_t val_vm_init3(val_t *val,valstruct_t *stack, valstruct_t *work, valstruct_t *dict);
 err_t val_vm_init_(val_t *val,vm_t *vm);
-err_t val_vm_clonedict(val_t *val,vm_t *vmsrc);
-err_t val_vm_destroy(val_t *val);
-err_t val_vm_clone(val_t *ret, val_t *orig);
+void val_vm_clonedict(valstruct_t *vmdst,vm_t *vmsrc);
+void _val_vm_destroy(valstruct_t *vm);
+err_t val_vm_clone(val_t *ret, vm_t *orig);
 
-err_t val_vm_finalize(val_t *val, err_t e); //destroys vm and replaces with either output stack or val to throw
+err_t _val_vm_runthread(valstruct_t *vm);
+err_t val_vm_eval_final(val_t *ret, valstruct_t *vm);
+err_t val_vm_finalize(val_t *ret, valstruct_t *vm, err_t e); //destroys vm and replaces with either output stack or val to throw
 
-int val_vm_fprintf(val_t *val,FILE *file, const fmt_t *fmt);
-int val_vm_sprintf(val_t *val,val_t *buf, const fmt_t *fmt);
+int val_vm_fprintf(valstruct_t *vm,FILE *file, const fmt_t *fmt);
+int val_vm_sprintf(valstruct_t *vm,valstruct_t *buf, const fmt_t *fmt);
 
 #endif

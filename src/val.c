@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -13,309 +13,383 @@
 //limitations under the License.
 
 #include "val.h"
-#include "val_num.h"
-#include "val_cast.h"
+
+#include "val_list.h"
 #include "val_string.h"
-#include "val_bytecode.h"
-#include "val_file_internal.h" //for printing (should be moved to val_file.c)
-#include "vm_debug.h"
-#include "vm_err.h"
+#include "val_dict.h"
+#include "val_ref.h"
+#include "val_file.h"
+#include "val_vm.h"
 #include "val_printf.h"
-#include "val_func.h"
-#include "ops.h"
+#include "vm_err.h"
+#include "opcodes.h"
+#include "defpool.h"
+#include "helpers.h"
 
-#include "string.h"
 #include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
 
-val_t* valcpy(val_t *dst, val_t *src, size_t n) {
-  return (val_t*)memcpy(dst,src,sizeof(val_t)*n);
-}
-val_t* valmove(val_t *dst, val_t *src, size_t n) {
-  return (val_t*)memmove(dst,src,sizeof(val_t)*n);
-}
-err_t valcln(val_t *dst, val_t *src, size_t n) {
-  size_t i;
-  for(i=0;i<n;++i) {
-    err_t r;
-    if ((r=val_clone(dst+i,src+i))) return _fatal(r);
+
+
+inline double __val_dbl(val_t val) { val = ~val; return *((double*)(&val)); }
+inline val_t __dbl_val(const double f) { return ~( *((val_t*)&f) ); }
+
+//valstruct_t* __val_ptr(val_t val) { return val_ptr(val); }
+//int32_t __val_int(val_t val) { return __val_int(val); }
+//double __val_dbl(val_t val) { return __val_dbl(val); }
+//val_t __str_val(valstruct_t *v) { return __str_val(v); }
+//val_t __lst_val(valstruct_t *v) { return __lst_val(v); }
+//val_t __val_val(valstruct_t *v) { return __val_val(v); }
+//val_t __int_val(int32_t i) { return __int_val(i); }
+//val_t __dbl_val(double v) { return __dbl_val(v); }
+
+//TODO: we need a new thread-safe pool allocator.
+//DEFINE_SIMPLE_POOL(valstruct_t,4096,_valstruct_alloc,_valstruct_release)
+DEFINE_NO_POOL(valstruct_t,4096,_valstruct_alloc,_valstruct_release)
+
+
+void val_destroy(val_t val) {
+  valstruct_t *v;
+  switch(__val_tag(val)) {
+    case _STR_TAG:
+      v = __str_ptr(val);
+      if (v->v.str.buf) { _sbuf_release(v->v.str.buf); }
+      break;
+    case _LST_TAG:
+      v = __lst_ptr(val);
+      if (v->v.lst.buf) { _lst_release(v); }
+      break;
+    case _VAL_TAG:
+      v = __val_ptr(val);
+      switch(v->type) {
+        case TYPE_DICT:
+          _val_dict_destroy_(v);
+          _valstruct_release(v);
+          break;
+        case TYPE_REF:
+          _val_ref_destroy(v);
+          break;
+        case TYPE_FILE:
+          _val_file_destroy(v);
+          break;
+        case TYPE_VM:
+          _val_vm_destroy(v);
+          break;
+        default:
+          _fatal(ERR_NOT_IMPLEMENTED);
+      }
+      return;
+    default:
+      return; //skip releasing valstruct
   }
-  return 0;
+  _valstruct_release(v);
 }
-err_t valdestroy(val_t *p, size_t n) {
+void val_destroyn(val_t *p, size_t n) {
   for(;n;p++,n--) {
-    val_destroy(p);
-  }
-  return 0;
-}
-void val_clear(val_t *p) {
-  p->type = VAL_INVALID;
-}
-void valclr(val_t *p, unsigned int len) {
-  while(len--) {
-    p->type = VAL_INVALID;
-    ++p;
+    val_destroy(*p);
   }
 }
 
 
-err_t val_basic_clone(val_t *ret, val_t *orig) {
-  *ret = *orig;
-  return 0;
+err_t val_clone(val_t *val, val_t orig) {
+  valstruct_t *p,*origp;
+  err_t e;
+  //if (val_is_double(val) || val_is_ptr(val)) {
+  //  return val;
+  //} else {
+  switch(__val_tag(orig)) {
+    case _STR_TAG:
+      if (!(p = _valstruct_alloc())) return _fatal(ERR_MALLOC);
+
+      origp = __str_ptr(orig);
+      *p=*origp;
+      if (p->v.str.buf) refcount_inc(p->v.str.buf->refcount);
+      *val = __str_val(p);
+      return 0;
+    case _LST_TAG:
+      if (!(p = _valstruct_alloc())) return _fatal(ERR_MALLOC);
+
+      origp = __lst_ptr(orig);
+      *p=*origp;
+      if (p->v.lst.buf) refcount_inc(p->v.lst.buf->refcount);
+      *val = __lst_val(p);
+      return 0;
+    case _VAL_TAG:
+      origp = __val_ptr(orig);
+
+      //type clone function
+      switch(origp->type) {
+        case TYPE_DICT:
+          if ((e = _val_dict_clone(val,origp))) return e;
+          break;
+        case TYPE_REF:
+          if ((e = _val_ref_clone(val,origp))) return e;
+          break;
+        case TYPE_FILE:
+          if ((e = _val_file_clone(val,origp))) return e;
+          break;
+        case TYPE_VM:
+          if ((e = val_vm_clone(val,origp->v.vm))) return e;
+          break;
+        default:
+          _fatal(ERR_NOT_IMPLEMENTED);
+          //*p=*origp;
+      }
+      return 0;
+    case _TAG5:
+      return _fatal(ERR_BADTYPE);
+    default: //base case (for inlined val)
+      *val=orig;
+      return 0;
+  }
+  //}
 }
-err_t val_basic_destroy(val_t *val) {
-  val->type = VAL_INVALID;
+
+err_t val_clonen(val_t *val, val_t *orig, unsigned int n) {
+  unsigned int i=n;
+  err_t e;
+  while(i--) {
+    if ((e = val_clone(val++,*(orig++)))) { //if we hit an error we need to destroy the already cloned values
+      for(++i;i<n;++i) {
+        val_destroy(*(++val));
+      }
+      return e;
+    }
+  }
   return 0;
 }
 
-err_t val_basic_print(val_t *val) { 
-  switch(val->type) {
-    case TYPE_NULL:
-      printf("NULL");
-      break;
-    case TYPE_INT: //integer number (stored as valint_t)
-      printf("%ld",val_int(val));
-      break;
-    case TYPE_FLOAT: //floating point number (stored as double)
-      printf("%f",val_float(val));
-      break;
-    case TYPE_HASH:
-      printf("{hash}");
-      break;
-    case TYPE_VM:
-      printf("{hash}");
-      break;
-    case TYPE_NATIVE_FUNC: //built-in
-      if (val->val.func.name) printf("native(%s)",val->val.func.name);
-      else printf("native(%p)",val->val.func.f);
-      break;
-    case TYPE_FILE:
-    case TYPE_REF:
-    case TYPE_BYTECODE:
-    case TYPE_STRING:
-    case TYPE_IDENT:
-    case TYPE_LIST:
-    case TYPE_CODE:
+err_t val_validate(val_t val) {
+  valstruct_t *v;
+  if (val_is_double(val)) {
+    return 0; //TODO: validate double (e.g. supported NaN values)
+  }
+  int op;
+  unsigned int off,len,size;
+  switch(__val_tag(val)) {
+    case _OP_TAG:
+      op = __val_op(val);
+      if (op < 0 || op >= N_OPS) return _throw(ERR_BADTYPE);
+      return 0;
+    case _INT_TAG:
+      return 0; //TODO: validate int is only 32 bits
+    case _STR_TAG:
+      v = __str_ptr(val);
+      off = v->v.str.off;
+      len = v->v.str.len;
+
+      if (v->v.str.buf) {
+        if (v->v.str.buf->refcount < 1) return _throw(ERR_BADTYPE);
+        if (v->v.str.buf->refcount > 10000) return _throw(ERR_BADTYPE); //NOTE: this doesn't actually guarantee val is bad, but seems highly unlikely during VM debugging
+        size = v->v.str.buf->size;
+        if (off > size || len > size || off+len > size) return _throw(ERR_BADTYPE);
+      } else {
+        if (len != 0) return _throw(ERR_BADTYPE);
+      }
+      switch(v->type) {
+        case TYPE_STRING:
+          return 0;
+        case TYPE_IDENT:
+          return 0;
+        //case TYPE_BYTECODE:
+        default:
+          return _throw(ERR_BADTYPE);
+      }
+    case _LST_TAG:
+      v = __lst_ptr(val);
+      off = v->v.lst.off;
+      len = v->v.lst.len;
+
+      if (v->v.lst.buf) {
+        if (v->v.lst.buf->refcount < 1) return _throw(ERR_BADTYPE);
+        if (v->v.lst.buf->refcount > 10000) return _throw(ERR_BADTYPE); //NOTE: this doesn't actually guarantee val is bad, but seems highly unlikely during VM debugging
+        size = v->v.lst.buf->size;
+        if (off > size || len > size || off+len > size) return _throw(ERR_BADTYPE);
+      } else {
+        if (len != 0) return _throw(ERR_BADTYPE);
+      }
+      switch(v->type) {
+        case TYPE_LIST:
+          return 0;
+        case TYPE_CODE:
+          return 0;
+        default:
+          return _throw(ERR_BADTYPE);
+      }
+    case _VAL_TAG:
+      v = __val_ptr(val);
+
+      switch(v->type) {
+        case TYPE_DICT:
+          if (!v->v.dict.h) return _throw(ERR_BADTYPE);
+          //TODO: validate hashtable
+          if (v->v.dict.next) return val_validate(__val_val(v->v.dict.next));
+          return 0;
+        case TYPE_REF:
+          if (v->v.ref.refcount < 1) return _throw(ERR_BADTYPE);
+          if (v->v.ref.refcount > 10000) return _throw(ERR_BADTYPE); //NOTE: this doesn't actually guarantee val is bad, but seems highly unlikely during VM debugging
+          return 0;
+        case TYPE_FILE:
+          if (!v->v.file.f) return _throw(ERR_BADTYPE);
+          if (v->v.file.refcount < 1) return _throw(ERR_BADTYPE);
+          if (v->v.file.refcount > 10000) return _throw(ERR_BADTYPE); //NOTE: this doesn't actually guarantee val is bad, but seems highly unlikely during VM debugging
+          return 0;
+        case TYPE_VM:
+          return vm_validate(v->v.vm);
+        default:
+          return _throw(ERR_BADTYPE);
+      }
+    //case _TAG5:
     default:
-      return -1;
+      return _throw(ERR_BADTYPE);
+  }
+  return _throw(ERR_BADTYPE);
+}
+err_t val_validaten(val_t *p, unsigned int n) {
+  err_t e;
+  for(;n--;p++) {
+    if ((e = val_validate(*p))) return e;
   }
   return 0;
 }
 
-extern void val_list_init_handlers(struct type_handlers *h);
-extern void val_code_init_handlers(struct type_handlers *h);
-extern void val_string_init_handlers(struct type_handlers *h);
-extern void val_ident_init_handlers(struct type_handlers *h);
-extern void val_bytecode_init_handlers(struct type_handlers *h);
-extern void val_int_init_handlers(struct type_handlers *h);
-extern void val_float_init_handlers(struct type_handlers *h);
-extern void val_file_init_handlers(struct type_handlers *h);
-extern void val_hash_init_handlers(struct type_handlers *h);
-extern void val_ref_init_handlers(struct type_handlers *h);
-extern void val_vm_init_handlers(struct type_handlers *h);
-extern void val_func_init_handlers(struct type_handlers *h);
-
-int val_null_fprintf(val_t *val, FILE *file, const fmt_t *fmt) {
-  return fprintf(file,"NULL");
-}
-int val_null_sprintf(val_t *val, val_t *buf, const fmt_t *fmt) {
-  return val_sprint_cstr(buf,"NULL");
-}
-void val_null_init_handlers(struct type_handlers *h) {
-  h->fprintf = val_null_fprintf;
-  h->sprintf = val_null_sprintf;
-}
-int val_invalid_fprintf(val_t *val, FILE *file, const fmt_t *fmt) {
-  return fprintf(file,"INVALID");
-}
-int val_invalid_sprintf(val_t *val, val_t *buf, const fmt_t *fmt) {
-  return val_sprint_cstr(buf,"INVALID");
-}
-void val_invalid_init_handlers(struct type_handlers *h) {
-  h->fprintf = val_invalid_fprintf;
-  h->sprintf = val_invalid_sprintf;
-}
-
-int val_bad_fprintf(val_t *val, FILE *file, const fmt_t *fmt) {
-  return fprintf(file,"BADTYPE(%d)",val->type);
-}
-int val_bad_sprintf(val_t *val, val_t *buf, const fmt_t *fmt) {
-  err_t r,rlen=0;
-  if (0>(r = val_sprint_cstr(buf,"BADTYPE("))) return r;
-  rlen += r;
-  if (0>(r = _val_int_sprintf(val->type,buf,fmt_v))) return r;
-  rlen += r;
-  if (0>(r = val_sprint_cstr(buf,")"))) return r;
-  rlen += r;
-  return rlen;
-}
-
-void val_init_type_handlers() {
-  int i;
-  for(i=0; i <= VAL_NTYPES; ++i) {
-    type_handlers[i].destroy = val_basic_destroy;
-    type_handlers[i].clone = val_basic_clone;
-    type_handlers[i].fprintf = val_bad_fprintf;
-    type_handlers[i].sprintf = val_bad_sprintf;
+err_t val_tostring(val_t *str, val_t val) {
+  err_t e;
+  if (val_is_str(val)) {
+    if ((e = val_clone(str,val))) return e;
+    __str_ptr(*str)->type = TYPE_STRING;
+    return 0;
+  } else {
+    if ((e = val_string_init_empty(str))) goto out_e;
+    //if ((e = val_sprint(__str_ptr(*str),val))) goto out_str;
+    if (0>(e = val_sprintf_(val,__str_ptr(*str),fmt_v))) goto out_str;
+    return 0;
+out_str:
+    val_destroy(*str);
+out_e:
+    return e;
   }
-
-  val_null_init_handlers(&type_handlers[TYPE_NULL]);
-  val_invalid_init_handlers(&type_handlers[VAL_INVALID]);
-
-  val_list_init_handlers(&type_handlers[TYPE_LIST]);
-  val_code_init_handlers(&type_handlers[TYPE_CODE]);
-  val_string_init_handlers(&type_handlers[TYPE_STRING]);
-  val_ident_init_handlers(&type_handlers[TYPE_IDENT]);
-  val_bytecode_init_handlers(&type_handlers[TYPE_BYTECODE]);
-  val_int_init_handlers(&type_handlers[TYPE_INT]);
-  val_float_init_handlers(&type_handlers[TYPE_FLOAT]);
-  val_file_init_handlers(&type_handlers[TYPE_FILE]);
-  val_hash_init_handlers(&type_handlers[TYPE_HASH]);
-  val_ref_init_handlers(&type_handlers[TYPE_REF]);
-  val_vm_init_handlers(&type_handlers[TYPE_VM]);
-  val_func_init_handlers(&type_handlers[TYPE_NATIVE_FUNC]);
 }
 
-err_t val_clone(val_t *ret, val_t *orig) {
-  err_t r = type_handlers[orig->type].clone(ret,orig);
-  VM_DEBUG_VAL_CLONE(ret,orig);
-  return r;
-}
-err_t val_destroy(val_t *val) {
-  VM_DEBUG_VAL_DESTROY(val);
-  if (val_isvalid(val)) return type_handlers[val->type].destroy(val);
-  else return 0; //destroy no-op for INVALID
-}
-void val_move(val_t *ret, val_t *orig) {
-  *ret = *orig;
-  //set type to an invalid value (to make sure we don't try to use this val again)
-  orig->type = VAL_INVALID;
+int val_ispush(val_t val) {
+  if (val_is_int(val) || val_is_double(val)) return 1; //TODO: clean up ispush
+  else return !(val_is_opcode(val) || val_is_code(val) || val_is_ident(val) || val_is_file(val) || val_is_vm(val) || val_is_bytecode(val));
 }
 
-void val_null_init(val_t *val) {
-  val->type = TYPE_NULL;
-}
-
-
-
-err_t val_wprotect(val_t *val) {
-  if (val_ispush(val)) return 0;
-  else if (val_iscode(val)) return val_code_wrap(val);
-  else if (val_isident(val)) return val_ident_escape(val);
+//used when you want the evaluation of a val INSIDE A QUOTATION to result in the original val
+// - distinguish from protect, for when you want the evaluation of a BARE val directly on the work stack to result in the original val
+//
+//wrap a value so it's evaluation (inside a quotation) is the original value
+err_t val_qprotect(val_t *val) {
+  if (val_ispush(*val) || val_is_code(*val) || val_is_file(*val)) return 0;
+  //else if (val_is_code(*val)) return val_code_wrap(val);
+  else if (val_is_ident(*val)) return _val_str_rcat_ch(__str_ptr(*val),'\\');
   else {
-    err_t r;
-    if ((r = val_list_wrap(val))) return r;
-    if ((r = val_code_wrap(val))) return r;
-    val_t t;
-    r = val_list_rpush(val,val_func_init(&t,_op_expand,"expand"));
+    err_t e;
+    if ((e = val_list_wrap(val))) return e;
+    if ((e = val_code_wrap(val))) return e;
+    if ((e = _val_lst_rpush(__lst_ptr(*val),__op_val(OP_first)))) return e;
     return 0;
   }
 }
+//wrap a value so its evaluation (directly on the work stack) is the original value
 err_t val_protect(val_t *val) {
-  if (val_ispush(val) || val_iscode(val)) return 0;
-  //else if (val_iscode(val)) return val_code_wrap(val);
-  else if (val_isident(val)) return val_ident_escape(val);
+  if (val_ispush(*val)) return 0;
+  else if (val_is_code(*val) || val_is_file(*val)) return val_code_wrap(val);
+  else if (val_is_ident(*val)) return _val_str_rcat_ch(__str_ptr(*val),'\\');
   else {
-    err_t r;
-    if ((r = val_list_wrap(val))) return r;
-    if ((r = val_code_wrap(val))) return r;
-    val_t t;
-    r = val_list_rpush(val,val_func_init(&t,_op_expand,"expand"));
+    err_t e;
+    if ((e = val_list_wrap(val))) return e;
+    if ((e = val_code_wrap(val))) return e;
+    if ((e = _val_lst_rpush(__lst_ptr(*val),__op_val(OP_first)))) return e;
     return 0;
   }
 }
 
-int val_isvalid(val_t *val) {
-  return val->type != VAL_INVALID;
+int val_as_bool(val_t val) {
+  if (val_is_int(val)) return __val_int(val) != 0;
+  else if (val_is_double(val)) return __val_dbl(val) != 0;
+  else if (val_is_lst(val)) return !_val_lst_empty(__lst_ptr(val));
+  else if (val_is_str(val)) return !_val_str_empty(__str_ptr(val));
+  //else if (val_is_vm(val)) return !_val_vm_finished(__val_ptr(val));
+  else return 0;
 }
-
-int val_isnull(val_t *val) {
-  return val->type == TYPE_NULL;
-}
-
-int val_islisttype(val_t *val) {
-  return val->type == TYPE_LIST || val->type == TYPE_CODE;
-}
-
-int val_islist(val_t *val) {
-  return val->type == TYPE_LIST;
-}
-
-int val_iscode(val_t *val) {
-  return val->type == TYPE_CODE;
-}
-
-int val_isnumber(val_t *val) {
-  return val->type == TYPE_INT || val->type == TYPE_FLOAT;
-}
-
-int val_isint(val_t *val) {
-  return val->type == TYPE_INT;
-}
-
-int val_isfloat(val_t *val) {
-  return val->type == TYPE_FLOAT;
-}
-
-int val_isstringtype(val_t *val) {
-  return val->type == TYPE_STRING || val->type == TYPE_IDENT;
-}
-
-int val_isstring(val_t *val) {
-  return val->type == TYPE_STRING;
-}
-
-int val_isident(val_t *val) {
-  return val->type == TYPE_IDENT;
-}
-
-int val_isbytecode(val_t *val) {
-  return val->type == TYPE_BYTECODE;
-}
-
-int val_isfile(val_t *val) {
-  return val->type == TYPE_FILE;
-}
-
-int val_isfunc(val_t *val) {
-  return val->type == TYPE_NATIVE_FUNC;
-}
-
-int val_ishash(val_t *val) {
-  return val->type == TYPE_HASH;
-}
-
-int val_isref(val_t *val) {
-  return val->type == TYPE_REF;
-}
-
-int val_isvm(val_t *val) {
-  return val->type == TYPE_VM;
-}
-
-//whether this val is 
-int val_ispush(val_t *val) {
-  switch(val->type) {
-    case TYPE_NULL:
-    case TYPE_INT:
-    case TYPE_FLOAT:
-    case TYPE_STRING:
-    case TYPE_LIST:
-    case TYPE_HASH:
-    case TYPE_REF:
-      return 1;
-    default:
-      return 0;
+int val_compare(val_t lhs,val_t rhs) {
+  if (val_is_int(lhs)) {
+    if (val_is_int(rhs)) {
+      return __val_int(lhs) - __val_int(rhs);
+    } else if (val_is_double(rhs)) {
+      double c = (double)__val_int(lhs) - __val_dbl(rhs);
+      return c == 0 ? 0 : (c > 0 ? 1 : -1);
+    } else {
+      return -1; //type mismatch
+    }
+  } else if (val_is_double(lhs)) {
+    double c = __val_dbl(lhs);
+    if (val_is_double(rhs)) {
+      c -= __val_dbl(rhs);
+    } else if (val_is_int(rhs)) {
+      c -= (double)__val_int(rhs);
+    } else { //type mismatch
+      c = -1;
+    }
+    return c == 0 ? 0 : (c > 0 ? 1 : -1);
+  } else if (val_is_str(lhs) && val_is_str(rhs)) {
+    return _val_str_compare(__str_ptr(lhs),__str_ptr(rhs));
+  } else if (val_is_lst(lhs) && val_is_lst(rhs)) {
+    return _val_lst_compare(__lst_ptr(lhs),__lst_ptr(rhs));
+  } else {
+    return -1;
   }
 }
-
-int val_iscoll(val_t *val) {
-  switch(val->type) {
-    case TYPE_LIST:
-    case TYPE_CODE:
-    case TYPE_STRING:
-      return 1;
-    default:
+int val_eq(val_t lhs,val_t rhs) {
+  if (val_is_int(lhs)) {
+    if (val_is_int(rhs)) {
+      return __val_int(lhs) == __val_int(rhs);
+    } else if (val_is_double(rhs)) {
+      return (double)__val_int(lhs) == __val_dbl(rhs);
+    } else {
+      return 0; //type mismatch
+    }
+  } else if (val_is_double(lhs)) {
+    if (val_is_double(rhs)) {
+      return  __val_dbl(lhs) == __val_dbl(rhs);
+    } else if (val_is_int(rhs)) {
+      return  __val_dbl(lhs) == (double)__val_int(rhs);
+    } else { //type mismatch
       return 0;
+    }
+  } else if (val_is_str(lhs) && val_is_str(rhs)) {
+    return __str_ptr(lhs)->type == __str_ptr(rhs)->type && _val_str_eq(__str_ptr(lhs),__str_ptr(rhs));
+  } else if (val_is_lst(lhs) && val_is_lst(rhs)) {
+    return __lst_ptr(lhs)->type == __lst_ptr(rhs)->type && _val_lst_eq(__lst_ptr(lhs),__lst_ptr(rhs));
+  } else {
+    return 0;
   }
 }
-
+int val_lt(val_t lhs,val_t rhs) {
+  if (val_is_int(lhs)) {
+    if (val_is_int(rhs)) {
+      return __val_int(lhs) < __val_int(rhs);
+    } else if (val_is_double(rhs)) {
+      return (double)__val_int(lhs) < __val_dbl(rhs);
+    } else {
+      return 0; //type mismatch
+    }
+  } else if (val_is_double(lhs)) {
+    if (val_is_double(rhs)) {
+      return  __val_dbl(lhs) < __val_dbl(rhs);
+    } else if (val_is_int(rhs)) {
+      return  __val_dbl(lhs) < (double)__val_int(rhs);
+    } else { //type mismatch
+      return 0;
+    }
+  } else if (val_is_str(lhs) && val_is_str(rhs)) {
+    return _val_str_lt(__str_ptr(lhs),__str_ptr(rhs));
+  } else if (val_is_lst(lhs) && val_is_lst(rhs)) {
+    return _val_lst_lt(__lst_ptr(lhs),__lst_ptr(rhs));
+  } else {
+    return 0;
+  }
+}

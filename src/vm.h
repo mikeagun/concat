@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -14,30 +14,94 @@
 
 #ifndef __VM_H__
 #define __VM_H__ 1
-#include "vmstate.h"
+#include "val.h"
+#include "pthread.h"
 
-#define OPT_NONE (0)
-#define OPT_DEFAULT (0)
-#define OPT_NATIVEFUNC (1)
+struct vm_stats {
+  unsigned int steps;
+  unsigned int lookups;
+  unsigned int max_stack;
+  unsigned int max_work;
+}; 
+
+//TODO: consider code management overhead of making vm members valstructs instead of val_t vs the (possible) performance optimization
+
+typedef struct _vm_t {
+  valstruct_t stack; //main stack (the actual open-stack is based on groupi below)
+  valstruct_t *open_list; //open list object for current stack
+  valstruct_t work; //work stack
+  valstruct_t cont; //continuation stack (exception handlers)
+  valstruct_t dict; //dictionary stack (top is current scope)
+  //struct _vm_t *debuggee; //TODO: how to handle debuggee
+
+  struct parser_rules *p;
+  unsigned int noeval;
+  unsigned int groupi;
+
+  pthread_t thread;
+  int threadid; //used for printing threadid in state
+
+  sem_t lock; //lock for thread
+  enum state_enum { //thread state
+    STOPPED, //no thread attached
+    RUNNING, //currently running (and locked)
+    FINISHED //was running, now just waiting for join
+  } state;
+
+  struct vm_stats stats;
+} vm_t;
+
+err_t concat_init();
 
 int vm_init(vm_t *vm);
-int vm_destroy(vm_t *vm);
+err_t vm_init2(vm_t *vm, valstruct_t *stack, valstruct_t *work);
+err_t vm_init3(vm_t *vm, valstruct_t *stack, valstruct_t *work, valstruct_t *dict);
+void vm_clone(vm_t *vm, vm_t *orig);
+void vm_destroy(vm_t *vm);
+err_t vm_validate(vm_t *vm);
 
-int vm_thread(vm_t *vm);
+int vm_parse_input(vm_t *vm, const char *str, int len, valstruct_t *code);
+int vm_parse_code(vm_t *vm, const char *str, int len, valstruct_t *code);
 
-int vm_dowork(vm_t *vm, int max_steps); //run any pending work in this vm, but only up to max_steps evals
+int vm_list(vm_t *vm);
+int vm_listn(vm_t *vm, unsigned int n);
+err_t vm_printstate(vm_t *vm);
+int vm_qstate(vm_t *vm);
+int vm_vstate(vm_t *vm);
+int vm_fprintf(vm_t *vm, FILE *file, const fmt_t *fmt);
+int vm_sprintf(vm_t *vm, valstruct_t *buf, const fmt_t *fmt);
 
+err_t vm_wait(vm_t *vm); //wait for running VM to finish (and join thread)
 
-int vm_step(vm_t *vm, int steps, unsigned int min_wstack); //run work with various limits and statistics tracking
+int vm_noeval(vm_t *vm);
 
-int vm_eval(vm_t *vm, val_t *val); //evaluate a val (e.g. this is called on every input token-val of a script file)
+int vm_dict_put_compile(vm_t *vm, const char *opname, const char *code_str);
+int vm_dict_put_(vm_t *vm, const char *key, val_t val);
+int vm_dict_put(vm_t *vm, valstruct_t *key, val_t val);
+val_t vm_dict_get(vm_t *vm, valstruct_t *key);
 
-int vm_eval_code(vm_t *vm, const char *str, int len);
-int vm_compile_input(vm_t *vm, const char *str, int len, val_t *code);
-int vm_compile_code(vm_t *vm, const char *str, int len, val_t *code, int opt);
+err_t vm_val_rresolve(vm_t *vm, val_t *val);
+err_t vm_val_resolve(vm_t *vm, val_t *val);
 
-int vm_resolve_ident(vm_t *vm, val_t *ident);
+int vm_empty(vm_t *vm);
+err_t vm_push(vm_t *vm, val_t val);
+err_t vm_wpush(vm_t *vm, val_t val);
+err_t vm_cpush(vm_t *vm, val_t val);
+err_t vm_wappend(vm_t *vm, val_t val);
+err_t vm_pop(vm_t *vm, val_t *val);
+err_t vm_drop(vm_t *vm);
+val_t vm_top(vm_t *vm);
+err_t vm_trycatch(vm_t *vm, val_t tryval, val_t catchval); //prep vm for trycatch
 
-int _vm_eval_final(val_t *vm);
+int vm_hascont(vm_t *vm);
+err_t vm_pushcw(vm_t *vm);
+
+int vm_stack_printf(vm_t *vm, const char *format);
+int vm_stack_printf_(vm_t *vm, const char *format, int len);
+
+int vm_finished(vm_t *vm);
+err_t vm_runthread(vm_t *vm);
+
+err_t vm_dowork(vm_t *vm);
 
 #endif

@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -15,8 +15,8 @@
 #ifndef __VM_PARSER_H__
 #define __VM_PARSER_H__ 1
 
-#include "val.h"
 #include "parser.h"
+#include "val.h"
 
 enum parse_class {
   PCLASS_INIT=0,
@@ -59,8 +59,20 @@ enum parse_state {
 };
 
 
+struct vm_parse_code_state {
+  valstruct_t *root_list;
+  valstruct_t *open_list;
+  unsigned int groupi;
+};
 
-int vm_eval_tok(const char *tok, int len, enum parse_state state, enum parse_state target, val_t *v);
-struct parser_rules* get_vm_parser();
+
+//TODO: when parsing code from str type val, add functions that substr str type (string, ident) vals out of str to parse
+int vm_parse_tok(const char *tok, int len, enum parse_state state, enum parse_state target, val_t *v);
+int _vm_parse_input(struct parser_rules *p, const char *str, int len, valstruct_t *code);
+int _vm_parse_code(struct parser_rules *p, const char *str, int len, valstruct_t *code);
+int _vm_parse_code_(struct parser_rules *p, const char *str, int len, struct vm_parse_code_state *pstate);
+
+struct parser_rules* vm_get_parser();
+struct parser_rules* vm_new_parser();
 
 #endif

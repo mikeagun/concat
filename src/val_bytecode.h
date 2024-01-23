@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -16,40 +16,20 @@
 #define __VAL_BYTECODE_H__ 1
 
 #include "val.h"
-#include "opcode.h"
-
-void val_bytecode_init_handlers(struct type_handlers *h);
-
-int val_bytecode_fprintf(val_t *val,FILE *file, const fmt_t *fmt);
-int val_bytecode_sprintf(val_t *val,val_t *buf, const fmt_t *fmt);
-void val_bytecode_init(val_t *val);
-
-int _bytecode_rpush_int(val_t *buf, valint_t i);
-int _bytecode_rpush_float(val_t *buf, valfloat_t f);
-int _bytecode_rpush_string(val_t *buf, opcode_t type, const char *str, unsigned int len);
-
-int _bprintf__byte(val_t *buf, uint8_t v);
-int _bprintf__opcode(val_t *buf, opcode_t op);
-int _bsprintf__vbyte32(char *buf, uint32_t v);
 
 
+val_t val_empty_bytecode();
+
+err_t val_bytecode_init_empty(val_t *v);
+
+int val_bytecode_fprintf(valstruct_t *v,FILE *file, const struct printf_fmt *fmt);
+int val_bytecode_sprintf(valstruct_t *v,valstruct_t *buf, const struct printf_fmt *fmt);
+
+err_t bytecode_rpush(valstruct_t *b, val_t val);
 
 
+unsigned int _bytecode_write_vbyte32(char *buf, uint32_t v);
+unsigned int _bytecode_read_vbyte32(const char *ip, uint32_t *v);
 
 
-
-////======== Old Interface ========
-//void val_bytecode_init_handlers(struct type_handlers *h);
-//
-//int val_bytecode_fprintf(val_t *val,FILE *file, const fmt_t *fmt);
-//int val_bytecode_sprintf(val_t *val,val_t *buf, const fmt_t *fmt);
-//void val_bytecode_val_to_string(val_t *val);
-//
-//void val_bytecode_init(val_t *val);
-//err_t val_bytecode_init_cstr(val_t *val, const char *str);
-//err_t val_bytecode_init_(val_t *val, char *str, unsigned int len, unsigned int size);
-//
-//err_t val_bytecode_rpush(val_t *code, val_t *val);
-//err_t val_bytecode_lpop(val_t *code, val_t *val);
-//err_t val_bytecode_cat(val_t *code, val_t *rhs);
 #endif

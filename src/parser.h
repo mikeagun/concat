@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -20,6 +20,8 @@
 
 //This is some code hacked over an old FSM-based language parser I wrote for another project
 //  - TODO: code-review, should we replace, refactor, or keep???
+//  - TODO: more readable fsm building interface
+//  - TODO: print and load interface so we can hardcode FSM into C program instead of needing FSM building code
 
 //idea behind this parser is to generate a parser FSM, and then just run the FSM for each char, outputing tokens as it goes
 //we assign every input char to a parse class using a mapping function (so there are fewer FSM cases to deal with)
@@ -36,7 +38,7 @@ typedef unsigned char state_entry_t;
 #define _PSTATE_BITS_ (5)
 const int _PSTATE_MASK_;
 
-enum parse_op { //TODO: figure out how to support sub-fsms
+enum parse_op {
   PARSE_NOSPLIT=0,     //don't split token (keep building)
   PARSE_SPLITA_BEFORE,  //split token before this char (so char becomes part of next tok)
   PARSE_SPLITA_AFTER,   //split token after this char (so char included in this token)

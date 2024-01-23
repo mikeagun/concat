@@ -1,4 +1,4 @@
-#Copyright (C) 2020 D. Michael Agun
+#Copyright (C) 2024 D. Michael Agun
 #
 #Licensed under the Apache License, Version 2.0 (the "License");
 #you may not use this file except in compliance with the License.
@@ -14,6 +14,19 @@
 
 # various methods for handling named local variables
 #  - effectively pops named locals from stack at start of code to be (re)used throughout code
+#  - currently supports using dictionary for locals (locals.def), and code agnostic sip/dip solution (locals)
+#
+#Other options for handling locals:
+#  - store locals in list (prefix code with wrap, then dip under locals where we need to hide them)
+#    - at each reference, use appropriate [dnth] op to get the local we need
+#    - possibly lpop/rpop or otherwise extract local for last reference, then unwrap the final reference in the code
+#      - might want/need to shuffle locals at start to make this more straightforward, so not sure on savings if any unless ordering is already good/close-enough
+#
+#TODO: once we have some basic static analysis tools baked in, implement code analysis version
+#  - e.g. if we have (A B C) and we do [+], don't need to dig out and dip under A since we won't look at or modify it
+#  - ultimately want to minimize the number of vals shuffled by choosing between stack shuffling and dip appropriately
+#
+#TODO: version of locals that generates code with stack comments (to improve readability of the mess of output code)
 
 #simplest locals function -- save locals to local scope before code eval
 # - doesn't modify body, just stores locals before code and wraps whole thing in scope
@@ -167,7 +180,7 @@
 
 #basic sip/dip solution
 # - up to one dig,bury,dipn,sip per reference for most complicated cases (plus bury,dip for first reference)
-#   - dig,bury for reordering locals (bury the local we need to the bottom)
+#   - dig,bury for reordering locals (bury the local we need to the bottom after digging it up)
 #   - dip/dipn to dip around locals not needed for this reference
 #   - sip the local if we need it again for another reference
 #   - For first reference: dip out to first reference and bury to bottom
@@ -354,5 +367,9 @@
   rlocals_ cat
 ] \locals def
 
-#TODO: code analysis locals -- analyze code to do minimal stack shuffling and dip/sips to get locals (and stack below locals) in place at right times
-
+#TODO: code analysis locals -- analyze code to do minimal stack shuffling and dip/sips to get locals (and stack below locals) in place at the right times
+# - fall back to sip/dip version as base case, since that is completely code agnostic
+# - optimize out dig+dip for lower vals on stack when we know we won't touch them
+#   - e.g. [+] instead of [dig2 [+] dip]
+# - skip/reduce shuffles for commutative operations
+#   - e.g. [2 +] instead of [[2] dip +]

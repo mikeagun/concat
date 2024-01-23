@@ -1,4 +1,4 @@
-#Copyright (C) 2020 D. Michael Agun
+#Copyright (C) 2024 D. Michael Agun
 #
 #Licensed under the Apache License, Version 2.0 (the "License");
 #you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
   [ [ [2 swap lpush]guard ]thread ] sip
   [ [ [3 swap lpush]guard ]thread ] sip
     [ [4 swap lpush]guard ]thread
+  debug
   4 [eval pop] times
 
   #(1 2 3 4) [

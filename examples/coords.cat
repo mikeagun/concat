@@ -1,4 +1,4 @@
-#Copyright (C) 2020 D. Michael Agun
+#Copyright (C) 2024 D. Michael Agun
 #
 #Licensed under the Apache License, Version 2.0 (the "License");
 #you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
 #multi-coordinate-system coordinate calculation library
 
 #a coordinate is representedy by a list containing a coord type and then type-specified fields
-#The type field is used to lookup the correct handler for an operation (polymorphism)
+#The type field is used to lookup the correct handler for an operation (simple polymorphic type system)
 
 1 \carttype def
 2 \polartype def

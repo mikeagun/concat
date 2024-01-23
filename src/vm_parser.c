@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -13,8 +13,11 @@
 //limitations under the License.
 
 #include "vm_parser.h"
+#include "vm_parser_internal.h"
+#include "vm_err.h"
 #include "val_string.h"
-#include "val_num.h"
+#include "val_list.h"
+#include "val_math.h"
 #include "helpers.h"
 
 #include <ctype.h>
@@ -24,42 +27,142 @@ const char* vm_get_classname(int pclass);
 const char* vm_get_statename(int pstate);
 
 
-//evaluate a token and convert it to a val_t for the runtime to use
-int vm_eval_tok(const char *tok, int len, enum parse_state state, enum parse_state target, val_t *v) {
+//parse string token into val_t
+err_t vm_parse_tok(const char *tok, int len, enum parse_state state, enum parse_state target, val_t *v) {
   //printf("vm_eval_tok '%s'\n",tok);
 //if it is a defined operator, do that, otherwise try number / quote
   if (len == 0) {
-    val_null_init(v);
+    *v = VAL_NULL;
     return 0;
-  } else if (tok[0] == '"') { //string
-    return val_string_init_dquoted(v,tok,len);
-  } else if (tok[0] == '\'') { //string
-    return val_string_init_squoted(v,tok,len);
+  } else if (tok[0] == '"' || tok[0] == '\'') { //string
+    return val_string_init_quoted(v,tok,len);
   } else if (tok[0] == '#') { //comment
-    val_null_init(v);
+    *v = VAL_NULL;
     return 0;
   } else if (tok[0] == '\\') { //escaped ident or op
-    return val_ident_init_(v,tok,len);
+    return val_ident_init_cstr(v,tok,len);
   } else if (is_op_str(tok,len)) { //does this look like an operator
-    return val_ident_init_(v,tok,len);
-  } else if (0 == _val_num_parse(v,tok,len)) { //number TODO: do we let dictionary override numbers or not?
+    return val_ident_init_cstr(v,tok,len);
+  } else if (0 == val_num_parse(v,tok,len)) { //number
+    // TODO: do we let dictionary override numbers or not -- not is faster, but letting numbers be overriden allows some interesting flexibility
     return 0;
   } else if (is_identifier(tok,len)) {
-    return val_ident_init_(v,tok,len);
+    return val_ident_init_cstr(v,tok,len);
   } else { //invalid tok
     fprintf(stderr,"invalid token '%.*s' with end state %d\n",len,tok,state);
     return -1;
   }
 }
 
-struct parser_rules* get_vm_parser() {
+int vm_parse_input_handler(const char *tok, int len, int state, int target, void* arg) {
+  valstruct_t *code=arg;
+
+  int ret;
+
+  val_t t;
+  if ((ret = vm_parse_tok(tok,len,state,target,&t))) return ret;
+
+  if (!val_is_null(t)) {
+    if ((ret = _val_lst_rpush(code,t))) return ret;
+  }
+
+  return ret;
+}
+
+
+int _vm_parse_input(struct parser_rules *p, const char *str, int len, valstruct_t *code) {
+  if (len == 0 || str[0] == '\0') return 0;
+  return parser_eval(p,str,len,NULL,vm_parse_input_handler,code,NULL,NULL,vm_parse_input_handler,code);
+}
+
+int vm_parse_code_handler(const char *tok, int len, int state, int target, void* arg) {
+  struct vm_parse_code_state *pstate = arg;
+
+  int r;
+
+  val_t t;
+  if ((r = vm_parse_tok(tok,len,state,target,&t))) return r;
+
+  valstruct_t *v = __str_ptr(t); //need to check for val_is_str() before using
+
+  if (val_is_str(t) && v->type == TYPE_IDENT && _val_str_len(v) == 1 && is_grouping_op(*_val_str_begin(v))) { //group ops
+    unsigned int i;
+    switch(*_val_str_begin(v)) {
+      case '[':
+        val_destroy(t);
+        t = val_empty_code();
+        if ((r = _val_lst_rpush(pstate->open_list,t))) return -1;
+        pstate->groupi++;
+        pstate->open_list = __lst_ptr(t);
+        break;
+      case ']':
+        val_destroy(t);
+        if (pstate->groupi<1) return -1;
+        else if (pstate->open_list->type != TYPE_CODE) return -1;
+        pstate->groupi--;
+        pstate->open_list = pstate->root_list;
+        for(i=0;i<pstate->groupi;++i) {
+          pstate->open_list = __lst_ptr(_val_lst_end(pstate->open_list)[-1]);
+        }
+        break;
+      case '(':
+        val_destroy(t);
+        t = val_empty_list();
+        if ((r = _val_lst_rpush(pstate->open_list,t))) return -1;
+        pstate->groupi++;
+        pstate->open_list = __lst_ptr(t);
+        break;
+      case ')':
+        val_destroy(t);
+        if (pstate->groupi<1) return -1;
+        else if (pstate->open_list->type != TYPE_LIST) return -1;
+        pstate->groupi--;
+        pstate->open_list = pstate->root_list;
+        for(i=0;i<pstate->groupi;++i) {
+          pstate->open_list = __lst_ptr(_val_lst_end(pstate->open_list)[-1]);
+        }
+        break;
+      default: return -1; //unhandled case (should never happen)
+    }
+  } else if (!val_is_null(t)) {
+    return _val_lst_rpush(pstate->open_list,t);
+  } else { //skip null vals
+  }
+  return 0;
+}
+
+//parses lists/code grouping ops to build list/code vals
+// - can initialize pstate to start parsing with open list
+// - if groupi = 0 at end, all open lists have been closed
+int _vm_parse_code_(struct parser_rules *p, const char *str, int len, struct vm_parse_code_state *pstate) {
+  if (len == 0 || str[0] == '\0') return 0;
+  return parser_eval(p,str,len,NULL,vm_parse_code_handler,pstate,NULL,NULL,vm_parse_code_handler,pstate);
+}
+int _vm_parse_code(struct parser_rules *p, const char *str, int len, valstruct_t *code) {
+  struct vm_parse_code_state pstate = { .root_list = code, .open_list = code, .groupi = 0 };
+
+  int r;
+  if (0>(r = _vm_parse_code_(p,str,len,&pstate))) return _throw(ERR_BADPARSE);
+  if (pstate.groupi!=0) return _throw(ERR_BADPARSE); //make sure we closed out any groups
+  return 0;
+}
+
+struct parser_rules* vm_get_parser() { //get shared parser
+  static struct parser_rules *p = NULL;
+  if (!p) p = vm_new_parser();
+  return p;
+}
+
+struct parser_rules* vm_new_parser() {
   struct parser_rules *p = NULL;
-  if (p) return p;
+  //if (p) return p;
 
   //rpn calc language:
-  //FIXME: this needs rewrite, out of date now (the language spec and code comments, the code should be correct)
+  //TODO: this needs rewrite, out of date now (the language spec and code comments, the code should be correct)
   //  - the parser now treats idents and numbers the same (only special rules so we can differentiate sign vs op)
   //  - idents now keep ops (though op after number splits)
+  //TODO: consider simpler parser (e.g. indent/number/op splitting just using space and "()[]", plus maybe "{}")
+  //  - main difference is that we would change most op chars into ident chars
   //
   //symbols:
   //digits: '0123456789'
@@ -146,7 +249,7 @@ struct parser_rules* get_vm_parser() {
   parser_set_list_op_target(p,PSTATE_IDENT_ESCAPE,   PARSE_NOSPLIT,       PSTATE_IDENT,   1, PCLASS_IDENT); //idents keep ident chars (ident,digits, 'e', and '.')
   parser_set_list_op_target(p,PSTATE_IDENT_ESCAPE,   PARSE_NOSPLIT,       PSTATE_DIGIT,   1, PCLASS_DIGIT); //idents keep ident chars (ident,digits, 'e', and '.')
   parser_set_op_target(p,PSTATE_IDENT_ESCAPE,PCLASS_BSLASH,PARSE_NOSPLIT,PSTATE_IDENT_ESCAPE); //can have multiple leading backslashes to escape ident
-  parser_set_list_op_target(p,PSTATE_IDENT_ESCAPE,PARSE_SPLITA_AFTER, PSTATE_OP, 3, PCLASS_OP, PCLASS_SIGN, PCLASS_CLOSE_GROUP); //op chars can also be escaped with bslash
+  parser_set_list_op_target(p,PSTATE_IDENT_ESCAPE,PARSE_SPLITA_AFTER, PSTATE_OP, 2, PCLASS_OP, PCLASS_SIGN); //op chars can also be escaped with bslash
 
   //parser_set_list_op_target(p,PSTATE_IDENT_ESCAPE,   PARSE_NOSPLIT,       PSTATE_OP,   2, PCLASS_OP, PCLASS_CLOSE_GROUP); //idents keep ident chars (ident,digits, and 'e')
   
@@ -191,7 +294,6 @@ int vm_classify(char c) {
     case '-': return PCLASS_SIGN;
     case '_':
     case '.': return PCLASS_IDENT;
-    case '}': return PCLASS_CLOSE_GROUP; //parser treats } as close group
     default:
       if (isspace(c)) return PCLASS_SPACE;
       else if (isdigit(c)) return PCLASS_DIGIT;

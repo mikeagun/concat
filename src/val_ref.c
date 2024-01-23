@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -12,106 +12,103 @@
 //See the License for the specific language governing permissions and
 //limitations under the License.
 
+#include "val_ref.h"
 #include "val_ref_internal.h"
-#include "val_string.h"
 #include "val_printf.h"
-#include "vm_err.h"
 #include "helpers.h"
+#include <valgrind/helgrind.h>
 #include <errno.h>
-#include <stdlib.h>
 
-void val_ref_init_handlers(struct type_handlers *h) {
-  h->destroy = val_ref_destroy;
-  h->clone = val_ref_clone;
-  h->sprintf = val_ref_sprintf;
-  h->fprintf = val_ref_fprintf;
-}
-
-struct val_ref_struct* _val_ref_ref(val_t *val) {
-  return val->val.ref;
-}
-val_t* _val_ref_val(val_t *val) {
-  return &val->val.ref->val;
-}
+inline val_t* _val_ref_val(valstruct_t *ref) { return &ref->v.ref.val; }
 
 err_t val_ref_wrap(val_t *val) {
-  val_t t;
-  t.type = TYPE_REF;
-  fatal_if(ERR_FATAL,NULL==(t.val.ref = malloc(sizeof(struct val_ref_struct))));
-  t.val.ref->nwait=0;
-  fatal_if(ERR_LOCK,0 != sem_init(&t.val.ref->lock,0,1));
-  fatal_if(ERR_LOCK,0 != sem_init(&t.val.ref->wait,0,0));
-  t.val.ref->refcount=1;
-  val_move(&t.val.ref->val,val);
-  val_move(val,&t);
+  valstruct_t *ref;
+  if (!(ref = _valstruct_alloc())) return ERR_MALLOC;
+  ANNOTATE_RWLOCK_CREATE(ref);
+  ref->type = TYPE_REF;
+  ref->v.ref.nwait = 0;
+  fatal_if(ERR_LOCK,0 != sem_init(&ref->v.ref.lock,0,1));
+  fatal_if(ERR_LOCK,0 != sem_init(&ref->v.ref.wait,0,0));
+  ref->v.ref.refcount = 1;
+  ref->v.ref.val = *val;
+  *val = __ref_val(ref);
   return 0;
 }
 err_t val_ref_unwrap(val_t *ref) {
-  err_t r;
-  if ((r = _val_ref_lock(ref))) return r;
+  err_t e;
+  valstruct_t *rv = __val_ptr(*ref);
+  if ((e = _val_ref_lock(rv))) return e;
   val_t t;
-  if (ref->val.ref->refcount == 1) { //we are the last reference
-    val_move(&t,&ref->val.ref->val);
+  if (rv->v.ref.refcount == 1) { //we are the last reference
+    t = *_val_ref_val(rv);
+    val_clear(_val_ref_val(rv));
   } else {
-    val_clone(&t,&ref->val.ref->val);
+    if ((e = val_clone(&t,rv->v.ref.val))) goto out_e;
   }
-  r = _val_ref_unlock(ref);
-  val_destroy(ref);
-  val_move(ref,&t);
-  return r;
+  e = _val_ref_unlock(rv);
+  val_destroy(*ref);
+  *ref = t;
+  return e;
+out_e:
+  _val_ref_unlock(rv);
+  return e;
 }
 
-err_t val_ref_swap(val_t *ref, val_t *val) {
-  err_t r;
-  if ((r = _val_ref_lock(ref))) return r;
-  val_swap(&ref->val.ref->val,val);
-  if ((r = _val_ref_unlock(ref))) return r;
-  return r;
-}
-
-err_t _ref_lock(struct val_ref_struct *ref) {
-  err_t r;
-  throw_if(ERR_LOCK,(r = sem_wait(&ref->lock)));
+err_t val_ref_swap(valstruct_t *ref, val_t *val) {
+  err_t e;
+  if ((e = _val_ref_lock(ref))) return e;
+  val_swap(&ref->v.ref.val,val);
+  if ((e = _val_ref_unlock(ref))) return e;
   return 0;
 }
-err_t _ref_trylock(struct val_ref_struct *ref) {
-  err_t r;
-  if (!(r = sem_trywait(&ref->lock))) return 0;
+
+err_t _ref_lock(valstruct_t *ref) {
+  err_t e;
+  throw_if(ERR_LOCK,(e = sem_wait(&ref->v.ref.lock)));
+  ANNOTATE_RWLOCK_ACQUIRED(ref,1);
+  return 0;
+}
+err_t _ref_trylock(valstruct_t *ref) {
+  err_t e;
+  if (!(e = sem_trywait(&ref->v.ref.lock))) {
+    ANNOTATE_RWLOCK_ACQUIRED(ref,1);
+    return 0;
+  }
   else if (errno == EAGAIN) return ERR_LOCKED;
   else return _throw(ERR_LOCK);
 }
-err_t _ref_unlock(struct val_ref_struct *ref) {
-  err_t r;
-  throw_if(ERR_LOCK,(r = sem_post(&ref->lock)));
+err_t _ref_unlock(valstruct_t *ref) {
+  err_t e;
+  ANNOTATE_RWLOCK_RELEASED(ref,1);
+  throw_if(ERR_LOCK,(e = sem_post(&ref->v.ref.lock)));
   return 0;
 }
 
-err_t _ref_signal(struct val_ref_struct *ref) {
-  if (ref->nwait) { //post once if there are waiter(s)
-    --ref->nwait;
-    throw_if(ERR_LOCK,sem_post(&ref->wait));
+err_t _ref_signal(valstruct_t *ref) {
+  if (ref->v.ref.nwait) { //post once if there are waiter(s)
+    --ref->v.ref.nwait;
+    throw_if(ERR_LOCK,sem_post(&ref->v.ref.wait));
   }
   return 0;
 }
-err_t _ref_broadcast(struct val_ref_struct *ref) {
-  while (ref->nwait) { //post once for each waiter
-    --ref->nwait;
-    throw_if(ERR_LOCK,sem_post(&ref->wait));
+err_t _ref_broadcast(valstruct_t *ref) {
+  while (ref->v.ref.nwait) { //post once for each waiter
+    --ref->v.ref.nwait;
+    throw_if(ERR_LOCK,sem_post(&ref->v.ref.wait));
   }
   return 0;
 }
-err_t _ref_wait(struct val_ref_struct *ref) {
+err_t _ref_wait(valstruct_t *ref) {
   err_t r;
-  ++ref->nwait;
+  ++ref->v.ref.nwait;
   if ((r = _ref_unlock(ref))) return r;
 
-  throw_if(ERR_LOCK,sem_wait(&ref->wait));
+  throw_if(ERR_LOCK,sem_wait(&ref->v.ref.wait));
   return 0;
 }
 
-err_t val_ref_signal(val_t *val) {
+err_t val_ref_signal(valstruct_t *ref) {
   err_t r;
-  struct val_ref_struct *ref = val->val.ref;
   if ((r = _ref_lock(ref))) return r;
   if ((r = _ref_signal(ref))) {
     _ref_unlock(ref);
@@ -119,9 +116,8 @@ err_t val_ref_signal(val_t *val) {
   } 
   return _ref_unlock(ref);
 }
-err_t val_ref_broadcast(val_t *val) {
+err_t val_ref_broadcast(valstruct_t *ref) {
   err_t r;
-  struct val_ref_struct *ref = val->val.ref;
   if ((r = _ref_lock(ref))) return r;
   if ((r = _ref_broadcast(ref))) {
     _ref_unlock(ref);
@@ -129,95 +125,103 @@ err_t val_ref_broadcast(val_t *val) {
   } 
   return _ref_unlock(ref);
 }
-err_t val_ref_wait(val_t *val) {
+err_t val_ref_wait(valstruct_t *ref) {
   err_t r;
-  struct val_ref_struct *ref = val->val.ref;
   if ((r = _ref_lock(ref))) return r;
   return _ref_wait(ref);
 }
 
-void _val_ref_swap(val_t *ref, val_t *val) {
-  val_swap(&ref->val.ref->val,val);
+//TODO: which, if any of these do we need???
+void _val_ref_swap(valstruct_t *ref, val_t *val) {
+  debug_assert(ERR_LOCKED == _val_ref_trylock(ref)); //we should already have lock before swapping
+  val_swap(&ref->v.ref.val,val);
 }
-err_t _val_ref_lock(val_t *val) {
-  return _ref_lock(val->val.ref);
+err_t _val_ref_lock(valstruct_t *ref) {
+  return _ref_lock(ref);
 }
-err_t _val_ref_trylock(val_t *val) {
-  return _ref_trylock(val->val.ref);
+err_t _val_ref_trylock(valstruct_t *ref) {
+  return _ref_trylock(ref);
 }
-err_t _val_ref_unlock(val_t *val) {
-  return _ref_unlock(val->val.ref);
+err_t _val_ref_unlock(valstruct_t *ref) {
+  return _ref_unlock(ref);
 }
-err_t _val_ref_signal(val_t *val) {
-  return _ref_signal(val->val.ref);
+err_t _val_ref_signal(valstruct_t *ref) {
+  return _ref_signal(ref);
 }
-err_t _val_ref_broadcast(val_t *val) {
-  return _ref_broadcast(val->val.ref);
+err_t _val_ref_broadcast(valstruct_t *ref) {
+  return _ref_broadcast(ref);
 }
-err_t _val_ref_wait(val_t *val) {
-  debug_assert(ERR_LOCKED == _val_ref_trylock(val)); //we should already have lock before waiting
-  return _ref_wait(val->val.ref);
+err_t _val_ref_wait(valstruct_t *ref) {
+  debug_assert(ERR_LOCKED == _val_ref_trylock(ref)); //we should already have lock before waiting
+  return _ref_wait(ref);
 }
 
 
-err_t val_ref_clone(val_t *ret, val_t *orig) {
-  *ret = *orig;
-  refcount_inc(ret->val.ref->refcount);
+err_t _val_ref_clone(val_t *ret, valstruct_t *orig) {
+  *ret = __val_val(orig);
+  refcount_inc(orig->v.ref.refcount);
   return 0;
 }
-err_t val_ref_destroy(val_t *val) {
-  if (0 == refcount_dec(val->val.ref->refcount)) {
+void _val_ref_destroy(valstruct_t *ref) {
+  if (0 == refcount_dec(ref->v.ref.refcount)) {
+    ANNOTATE_HAPPENS_AFTER(ref);
+    ANNOTATE_HAPPENS_BEFORE_FORGET_ALL(ref);
     //last reference, free resources
-    err_t r;
-    fatal_if(r,(r = _val_ref_trylock(val)));
-    sem_destroy(&val->val.ref->lock);
-    sem_destroy(&val->val.ref->wait);
-    val_destroy(&val->val.ref->val);
-    free(val->val.ref);
+    //err_t e; //TODO: trylock as a debug check
+    //if ((e = _val_ref_trylock(ref))) { _fatal(e); }
+    sem_destroy(&ref->v.ref.lock);
+    sem_destroy(&ref->v.ref.wait);
+    val_destroy(ref->v.ref.val);
+    //ANNOTATE_RWLOCK_RELEASED(ref,1);
+    ANNOTATE_RWLOCK_DESTROY(ref);
+    _valstruct_release(ref);
+  } else {
+    ANNOTATE_HAPPENS_BEFORE(ref);
   }
-  val->type = VAL_INVALID;
-  return 0;
 }
 
-int val_ref_fprintf(val_t *val,FILE *file, const fmt_t *fmt) {
-  err_t r;
-  if (ERR_LOCKED == (r = _val_ref_trylock(val))) {
-    return fprintf(file,"ref(REF LOCKED)");
-  } else if (r) return r;
+int val_ref_fprintf(valstruct_t *ref,FILE *file, const fmt_t *fmt) {
+  err_t e;
+  if (ERR_LOCKED == (e = _val_ref_trylock(ref))) {
+    return val_fprint_cstr(file,"ref(REF LOCKED)");
+  } else if (e) return e;
   int rlen = 0;
   if (fmt->conversion == 'V') {
-    throw_if(ERR_IO_ERROR,0>(r = fprintf(file,"ref(")));
-    rlen += r;
+    if(0>(e = val_fprint_cstr(file,"ref("))) return e;
+    rlen += e;
   }
-  if (0>(r = val_fprintf_(&val->val.ref->val,file,fmt))) goto out_bad;
-  rlen += r;
-  if ((r = _val_ref_unlock(val))) return r;
+  if (0>(e = val_fprintf_(ref->v.ref.val,file,fmt))) goto out_bad;
+  rlen += e;
+  if ((e = _val_ref_unlock(ref))) return e;
   if (fmt->conversion == 'V') {
-    throw_if(ERR_IO_ERROR,0>(r = fprintf(file,")")));
-    rlen += r;
+    if(0>(e = val_fprint_ch(file,')'))) return e;
+    rlen += e;
   }
   return rlen;
 out_bad:
-  _val_ref_unlock(val);
-  return r;
+  _val_ref_unlock(ref);
+  return e;
 }
-int val_ref_sprintf(val_t *val,val_t *buf, const fmt_t *fmt) {
-  err_t r;
-  if (ERR_LOCKED == (r = _val_ref_trylock(val))) {
+int val_ref_sprintf(valstruct_t *ref,valstruct_t *buf, const fmt_t *fmt) {
+  //TODO: use fmt
+  err_t e;
+  if (ERR_LOCKED == (e = _val_ref_trylock(ref))) {
     return val_sprint_cstr(buf,"ref(REF LOCKED)");
-  } else if (r) return r;
+  } else if (e) return e;
   int rlen = 0;
   if (fmt->conversion == 'V') {
-    if (0>(r = val_sprint_cstr(buf,"ref("))) return r; rlen += r;
+    if(0>(e = val_sprint_cstr(buf,"ref("))) return e;
+    rlen += e;
   }
-  if (0>(r = val_sprintf_(&val->val.ref->val,buf,fmt))) goto out_bad; rlen += r;
-  if ((r = _val_ref_unlock(val))) return r;
+  if (0>(e = val_sprintf_(ref->v.ref.val,buf,fmt))) goto out_bad;
+  rlen += e;
+  if ((e = _val_ref_unlock(ref))) return e;
   if (fmt->conversion == 'V') {
-    if (0>(r = val_sprint_cstr(buf,")"))) return r; rlen += r;
+    if(0>(e = val_sprint_ch(buf,')'))) return e;
+    rlen += e;
   }
   return rlen;
 out_bad:
-  _val_ref_unlock(val);
-  return r;
+  _val_ref_unlock(ref);
+  return e;
 }
-

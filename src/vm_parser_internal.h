@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -12,16 +12,12 @@
 //See the License for the specific language governing permissions and
 //limitations under the License.
 
+#ifndef __VM_PARSER_INTERNAL_H__
+#define __VM_PARSER_INTERNAL_H__ 1
+#include "parser.h"
 #include "val.h"
-#include "val_string.h"
-#include "val_bytecode.h"
-#include "val_list.h"
-#include "val_stack.h"
-#include "val_file.h"
-#include "val_num.h"
-#include "val_func.h"
-#include "val_cast.h"
-#include "val_compare.h"
-#include "val_printf.h"
-#include "val_vm.h"
+#include "vm.h"
+parse_handler_t vm_parse_input_handler;
+parse_handler_t vm_parse_code_handler;
 
+#endif

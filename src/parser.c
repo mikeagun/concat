@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -26,8 +26,17 @@
 //  - a target state (which state we should be in next)
 //  - an operation to perform for this char (either collect it into the existing token, throw an error, or split the current token before/after this char, or split the current token and skip this char)
 //
+//TODO: add functions for saving/loading fsm (so at least in release mode, we just load the static FSM string rather than build the FSM)
+//  - use ifdef on macro with FSM string to either load static FSM or build in code
+//
 //IDEAS:
 //  - could add a list of parser FSMs (and maybe a state stack to support recursion), where instead of the second handler we have some parse_ops for navigating between FSMs
+//  - direct threaded version of parser
+//    - jump directly to next op (skip loop and switch statement)
+//    - drop len, just use op to finish (skip len checks)
+//    - 256-entry lookup array option for classifier (more RAM for tiny MCUs, but on a real machine skips function call and return value checks)
+//    - have separate op handlers based on handlerA/handlerB being set (skip 1 check when handler set, only need to update tok when just validating)
+//
 
 const int _PSTATE_MASK_ = (1<<_PSTATE_BITS_)-1;
 
@@ -96,12 +105,14 @@ void parser_set_target(struct parser_rules *p, int state, int pclass, int target
   state_entry_t e = p->v[state*p->nclasses + pclass];
   e &= ~_PSTATE_MASK_; //clear target
   e |= target; //OR in target state
+  p->v[state*p->nclasses + pclass] = e;
 }
 
 void parser_set_op(struct parser_rules *p, int state, int pclass, enum parse_op op) {
   state_entry_t e = p->v[state*p->nclasses + pclass];
   e &= _PSTATE_MASK_; //clear everything but target
   e |= op<<_PSTATE_BITS_; //OR in op
+  p->v[state*p->nclasses + pclass] = e;
 }
 
 //void parser_set_all_entry(struct parser_rules *p, state_entry_t e) {
@@ -327,7 +338,7 @@ int parser_eval(struct parser_rules *p, const char *str, int len, struct parser_
       fprintf(stderr,"parse failure\n");
       goto parser_eval_return;
     } else {
-      int hret=0;
+      int hret=0; //TODO: use hret??? (or get rid of it)
       switch(op) {
         case PARSE_NOSPLIT: //don't split token (keep building)
           break;

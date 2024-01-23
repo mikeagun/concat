@@ -1,4 +1,4 @@
-#Copyright (C) 2020 D. Michael Agun
+#Copyright (C) 2024 D. Michael Agun
 #
 #Licensed under the Apache License, Version 2.0 (the "License");
 #you may not use this file except in compliance with the License.
@@ -15,8 +15,13 @@
 #infix parser
 #  - refactors infix code to postfix
 #    - handles fixity and operator precedence
-#  - uses { and } as grouping parens
-#  - set of pre/post/in-fix operators incomplete
+#  - uses { and } as grouping parens (since () and [] have other meanings)
+#  - plays nice with locals.cat
+#    - can use undefined words as locals in infix code, convert to postfix, then factor out locals using locals.cat
+#
+#  - TODO: support functions with variable number of arguments (e.g. list of functions which get passed list from csv instead of args directly on stack)
+#  - TODO: set of pre/post/in-fix operators incomplete
+#  - TODO: stack optimization - use communativity+associativity to minimize unecessary shuffles and stack depth
 
 [ [dup2 =] findp 0 ge ] \test_in def
 
@@ -24,13 +29,14 @@
   [ { } , ] test_in
   [
     dup isident
-    [dup ispush not] only
     [dup defined] only
+    [dup getdef ispush not] only
   ] unless
 ] \testop def
 
 [ [ dup ! } , quit qstate vstate ] test_in ] \testpostfix def
 
+#TODO: should { count as prefix op???
 [ [
   + - ~ _
   isnum isstring isident isnative islist iscode islisttype isfile ispush
@@ -44,7 +50,7 @@
 ] test_in ] \testprefix def
 
 [ [
-  + - * / , %
+  + - * / , % ^
   & | xor
   < > = lt gt eq le ge ne
   and or not
@@ -54,7 +60,7 @@
 
 
 
-[ \^ = 1 0 ifelse] \op_assoc def #for now just ^ is R-assoc (assignment = should be also)
+[ \^ = ] \op_assoc def #for now just ^ is R-assoc (assignment = should be also)
 
 [
   tostring [ "()[]{}" "!^" "_*/%" "+-" ] [dup2 find 0 ge] findp popd
@@ -72,7 +78,7 @@
 #    else binary infix op -- handle assoc
 #      while !infix_empty && infix_top is op
 #        if infix_top == ( or ), break
-#        if (op_assoc=L && op_prec>=top_prec) OR (op_assoc=R && op_prec<top_prec)
+#        if (op_assoc=L && op_prec>=top_prec) OR (op_assoc=R && op_prec>top_prec)
 #          output op, infix_pop
 #        else break
 #      infix_push
@@ -134,14 +140,14 @@
               \op_prec sip      #| [code...] [stack...] op_prec word
               #dup2 0 < ["invalid op_prec for " swap tostring cat throw] if
               op_assoc          #| [code...] [stack...] op_prec op_assoc
-              #<0 no check, =0 left precedence, otherwise right precedence
+              #<0 no check, =0 left precedence, >0 right precedence
               dup 0 < [dup2 0 <] unless [
-                pop pop []
+                pop pop [] #TODO: should that be [pop 0] instead???
               ] [
-                0 = [
+                0 = [ #left precedence - preccheck <
                   [dup2 op_prec <]
-                ] [
-                  [dup2 op_prec ge]
+                ] [   #right precedence - preccheck <=
+                  [dup2 op_prec le]
                 ] ifelse
                 lpush #push word precedence into preccheck
               ] ifelse                 #| [code...] [stack...] [preccheck]

@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -13,13 +13,16 @@
 //limitations under the License.
 
 #include "val_printf.h"
-#include "val_num.h"
+#include "val_printf_helpers.h"
+#include "val_math.h"
 #include "val_string.h"
-#include "val_file.h"
+#include "val_list.h"
+//#include "val_file.h"
 #include "helpers.h"
 #include "vm_err.h"
 #include <ctype.h> //for character classes
 #include <string.h> //for strlen
+#include <stdarg.h> //for vararg
 
 //standard print formats
 const fmt_t _fmt_v = {
@@ -88,59 +91,34 @@ int isflag(char c) {
 }
 
 
-int val_printv(val_t *val) {
+err_t val_printv(val_t val) {
   err_t e;
   if (0>(e = val_fprintf_(val,stdout,fmt_v))) return e;
-  if (0>(e = val_fprint_(stdout,"\n",1))) return e;
-  val_destroy(val);
+  if (0>(e = val_fprint_ch(stdout,'\n'))) return e;
   return 0;
 }
-int val_printV(val_t *val) {
+err_t val_printV(val_t val) {
   err_t e;
   if (0>(e = val_fprintf_(val,stdout,fmt_V))) return e;
-  if (0>(e = val_fprint_(stdout,"\n",1))) return e;
-  val_destroy(val);
+  if (0>(e = val_fprint_ch(stdout,'\n'))) return e;
   return 0;
 }
-int val_printv_(val_t *val) {
+err_t val_printv_(val_t val) {
   err_t e;
   if (0>(e = val_fprintf_(val,stdout,fmt_v))) return e;
-  val_destroy(val);
   return 0;
 }
-int val_printV_(val_t *val) {
+err_t val_printV_(val_t val) {
   err_t e;
   if (0>(e = val_fprintf_(val,stdout,fmt_V))) return e;
-  val_destroy(val);
-  return 0;
-}
-int val_peekV(val_t *val) {
-  err_t e;
-  if (0>(e = val_fprintf_(val,stdout,fmt_V))) return e;
-  if (0>(e = val_fprint_(stdout,"\n",1))) return e;
   return 0;
 }
 
-int val_fprintf_(val_t *val, FILE *file, const fmt_t *fmt) {
-  return type_handlers[val->type].fprintf(val,file,fmt);
-}
-//#define SPRINTF_CHECK_RLEN 1
-// - doesn't play nice with threading
-int val_sprintf_(val_t *val, val_t *buf, const fmt_t *fmt) {
-#ifdef SPRINTF_CHECK_RLEN
-  int ra = type_handlers[val->type].sprintf(val,NULL,fmt);
-  int rb = type_handlers[val->type].sprintf(val,buf,fmt); 
-  debug_assert_r(ra == rb);
-  return rb;
-#else
-  return type_handlers[val->type].sprintf(val,buf,fmt);
-#endif
-}
-
+//TODO: from old struct-val impl
 //int val_sprintf_truncated_(val_t *val, val_t *buf, const fmt_t *fmt, int min_field_width, int max_chars, int left_align) {
 //  //TODO: refactor -- at least some of the args are probably optional (pull from fmt, which we currently ignore)
 //  if (max_chars==0) return 0;
-//  else if (max_chars>0 && max_chars<3) return _fatal(BADARGS);
+//  else if (max_chars>0 && max_chars<3) return _fatal(ERR_BADARGS);
 //
 //  fmt_t tfmt = printf_fmt_V;
 //  tfmt.field_width = min_field_width;
@@ -168,7 +146,7 @@ int val_sprintf_(val_t *val, val_t *buf, const fmt_t *fmt) {
 //            case TYPE_LIST:r = val_sprint_cstr(&tbuf,"(..)"); break;
 //            case TYPE_CODE: r = val_sprint_cstr(&tbuf,"[..]"); break;
 //            //case TYPE_BYTECODE: r = val_sprint_cstr(&tbuf,"(..)"); break;
-//            default: return _fatal(FATAL); //shouldn't get here
+//            default: return _fatal(ERR_FATAL); //shouldn't get here
 //          }
 //        } else {
 //          switch(val->type) {
@@ -176,7 +154,7 @@ int val_sprintf_(val_t *val, val_t *buf, const fmt_t *fmt) {
 //            case TYPE_LIST:r = val_sprint_cstr(&tbuf,"...)"); break;
 //            case TYPE_CODE: r = val_sprint_cstr(&tbuf,"...]"); break;
 //            //case TYPE_BYTECODE: r = val_sprint_cstr(&tbuf,"...)"); break;
-//            default: return _fatal(FATAL); //shouldn't get here
+//            default: return _fatal(ERR_FATAL); //shouldn't get here
 //          }
 //        }
 //      } else {
@@ -206,7 +184,115 @@ int val_sprintf_(val_t *val, val_t *buf, const fmt_t *fmt) {
 //}
 
 
+
+
+int val_fprint_(FILE *file, const char *str, unsigned int len) {
+  int r;
+  throw_if(ERR_IO_ERROR,0>(r=fprintf(file,"%.*s",len,str)));
+  return r;
+}
+int val_fprint_cstr(FILE *file, const char *str) {
+  int r;
+  throw_if(ERR_IO_ERROR,0>(r=fprintf(file,"%s",str)));
+  return r;
+}
+int val_fprint_ch(FILE *file, char c) {
+  int r;
+  throw_if(ERR_IO_ERROR,0>(r=fprintf(file,"%c",c)));
+  return r;
+}
+int val_fprint_ptr(FILE *file, void *p) {
+  int r;
+  throw_if(ERR_IO_ERROR,0>(r=fprintf(file,"%p",p)));
+  return r;
+}
+
+int val_sprint_(valstruct_t *buf, const char *str, unsigned int len) {
+  if (buf) {
+    int r;
+    if ((r = _val_str_cat_cstr(buf,str,len))) return r;
+    else return len;
+  } else {
+    return len;
+  }
+}
+int val_sprint_cstr(valstruct_t *buf, const char *str) {
+  int len = strlen(str);
+  if (buf) {
+    int r;
+    if ((r = _val_str_cat_cstr(buf,str,len))) return r;
+    else return len;
+  } else {
+    return len;
+  }
+}
+
+
+int val_sprint_ch(valstruct_t *buf, char c) {
+  if (buf) {
+    int r;
+    if ((r = _val_str_cat_ch(buf,c))) return r;
+  }
+  return 1;
+}
+//int val_sprint_hex(valstruct_t *buf, unsigned char c) {
+//  if (buf) {
+//    int r;
+//    if ((r = _val_str_cat_ch(buf,c))) return r;
+//  }
+//  return 1;
+//}
+int val_sprint_ptr(valstruct_t *buf, void *ptr) {
+  int ptrsize = sizeof(ptr);
+  int strsize = 2 * (ptrsize+1);
+  if (buf) {
+    char *p;
+    int r;
+    if ((r = _val_str_rextend(buf, strsize,&p))) return r;
+    p[0] = '0'; p[1] = 'x';
+    for(p += strsize; ; ptrsize--) {
+      unsigned char b = (unsigned char)(uintptr_t)ptr;
+      --p;
+      if (b>>4<10) *p = '0' + (b>>4);
+      else *p = 'a' + (b>>4);
+
+      --p;
+      if (b%16<10) *p = '0' + (b%16);
+      else *p = 'a' + (b%16);
+      ptr = (void*)((uintptr_t)ptr >> 8);
+    }
+  } else {
+    return strsize;
+  }
+}
+
+
+
+int val_printf(const char *format, ...) {
+  va_list args;
+  va_start(args, format);
+  int r = val_vfprintf(stdout, format, args);
+  va_end(args);
+  return r;
+}
+
 int val_fprintf(FILE *file, const char *format, ...) {
+  va_list args;
+  va_start(args, format);
+  int r = val_vfprintf(file,format,args);
+  va_end(args);
+  return r;
+}
+
+int val_sprintf(valstruct_t *buf, const char *format, ...) {
+  va_list args;
+  va_start(args, format);
+  int r = val_vsprintf(buf,format,args);
+  va_end(args);
+  return r;
+}
+
+int val_vfprintf(FILE *file, const char *format, va_list args) {
   int r;
   int len = strlen(format);
   int rlen=0;
@@ -216,30 +302,28 @@ int val_fprintf(FILE *file, const char *format, ...) {
   const char *str;
   int vali,precision_arg,field_width_arg;
 
-  va_list ap;
-  va_start(ap, format);
   while(len && 0<(r = _val_printf_parse(&format,&len,&str,&fmt,&vali,&precision_arg,&field_width_arg))) {
     if (str) {
       if (0>(r = val_fprint_(file,str,r))) goto bad;
     } else {
       throw_if_goto(ERR_BADESCAPE,bad,vali>=0 || precision_arg>0 || field_width_arg>0); //doesn't support indexed args currently
-      val_t *a;
-      if (precision_arg == 0) fmt.precision = va_arg(ap,int);
-      if (field_width_arg == 0) fmt.field_width = va_arg(ap,int);
+      val_t ignore;
+      if (field_width_arg == 0) fmt.field_width = va_arg(args,int);
+      if (precision_arg == 0) fmt.precision = va_arg(args,int);
       if (fmt.conversion == '_') {
-        a = va_arg(ap,val_t*);
+        ignore = va_arg(args,val_t);
       } else if (fmt.conversion == 'n') { //get num bytes printed so far (or since last 'n')
         throw_if_goto(ERR_BADESCAPE,bad,vali>=0); //doesn't support indexed args currently
         int n;
         if (fmt.flags & PRINTF_F_MINUS) n = rlen-prevn;
         else n = rlen;
-        *va_arg(ap,int*) = n;
+        *va_arg(args,int*) = n;
         prevn = rlen;
       } else if (fmt.conversion == '%') {
         if (0>(r = val_fprint_(file,"%",1))) goto bad;
         rlen += r;
       } else {
-        val_t *val = va_arg(ap,val_t*);
+        val_t val = va_arg(args,val_t);
 
         if (fmt.field_width > 0 && !(fmt.flags & PRINTF_F_MINUS)) { //pad left
           if (0>(r = _val_fprintf_padding(file,&fmt,val_sprintf_(val,NULL,&fmt),0))) return r; //first sprintf to NULL to get length for padding
@@ -248,7 +332,7 @@ int val_fprintf(FILE *file, const char *format, ...) {
 
         if (0>(r = val_fprintf_(val,file,&fmt))) {
           if (0>(r=val_fprint_(file,fmt.spec-1,fmt.speclen+1))) return r; //print failed conversion spec
-          fprintf(stdout,"\nprintf conversion error for \"%.*s\"\n",fmt.speclen+1,fmt.spec-1);
+          fprintf(stderr,"\nprintf conversion error for \"%.*s\"\n",fmt.speclen+1,fmt.spec-1);
           return r;
         } else {
           rlen += r;
@@ -256,18 +340,17 @@ int val_fprintf(FILE *file, const char *format, ...) {
           if (0>(r = _val_fprintf_padding(file,&fmt,r,1))) return r;
           rlen += r;
 
-          throw_if_goto(ERR_BADESCAPE,bad,fmt.flags & PRINTF_F_POP); //or ignore?
+          //throw_if_goto(ERR_BADESCAPE,bad,fmt.flags & PRINTF_F_POP); //or ignore???
         }
       }
     }
 
   }
 bad:
-  va_end(ap);
   return r;
 }
 
-int val_sprintf(val_t *buf, const char *format, ...) {
+int val_vsprintf(valstruct_t *buf, const char *format, va_list args) {
   int r;
   int len = strlen(format);
   int rlen=0;
@@ -277,30 +360,28 @@ int val_sprintf(val_t *buf, const char *format, ...) {
   const char *str;
   int vali,precision_arg,field_width_arg;
 
-  va_list ap;
-  va_start(ap, format);
   while(len && 0<(r = _val_printf_parse(&format,&len,&str,&fmt,&vali,&precision_arg,&field_width_arg))) {
     if (str) {
       if(0>(r = val_sprint_(buf,str,r))) goto bad;
     } else {
       throw_if_goto(ERR_BADESCAPE,bad,vali>=0 || precision_arg>0 || field_width_arg>0); //doesn't support indexed args currently
-      val_t *a;
-      if (precision_arg == 0) fmt.precision = va_arg(ap,int);
-      if (field_width_arg == 0) fmt.field_width = va_arg(ap,int);
+      val_t ignore;
+      if (field_width_arg == 0) fmt.field_width = va_arg(args,int);
+      if (precision_arg == 0) fmt.precision = va_arg(args,int);
       if (fmt.conversion == '_') {
-        a = va_arg(ap,val_t*);
+        ignore = va_arg(args,val_t);
       } else if (fmt.conversion == 'n') { //get num bytes printed so far (or since last 'n')
         throw_if_goto(ERR_BADESCAPE,bad,vali>=0); //doesn't support indexed args currently
         int n;
         if (fmt.flags & PRINTF_F_MINUS) n = rlen-prevn;
         else n = rlen;
-        *va_arg(ap,int*) = n;
+        *va_arg(args,int*) = n;
         prevn = rlen;
       } else if (fmt.conversion == '%') {
         if(0>(r = val_sprint_(buf,"%",1))) goto bad;
         rlen += r;
       } else {
-        val_t *val = va_arg(ap,val_t*);
+        val_t val = va_arg(args,val_t);
 
         if (fmt.field_width > 0 && !(fmt.flags & PRINTF_F_MINUS)) { //pad left
           if (0>(r = _val_sprintf_padding(buf,&fmt,val_sprintf_(val,NULL,&fmt),0))) goto bad; //first sprintf to NULL to get length for padding
@@ -323,27 +404,27 @@ int val_sprintf(val_t *buf, const char *format, ...) {
     }
   }
 bad:
-  va_end(ap);
   return r;
 }
 
-int val_printfv(val_t *format, val_t *args, int isstack) {
+int val_printfv(valstruct_t *format, valstruct_t *args, int isstack) {
   return val_fprintfv(stdout,format,args,isstack,args,isstack);
 }
-int val_printfv_(const char *format, int len, val_t *args, int isstack) {
+int val_printfv_(const char *format, int len, valstruct_t *args, int isstack) {
   return val_fprintfv_(stdout,format,len,args,isstack,args,isstack);
 }
 
-int val_fprintfv(FILE *file, val_t *format, val_t *v_args, int v_isstack, val_t *f_args, int f_isstack) {
-  throw_if(ERR_BADARGS,!val_isstring(format) || !val_islist(v_args) || !val_islist(f_args));
-  return val_fprintfv_(file,val_string_str(format),val_string_len(format),v_args,v_isstack,f_args,f_isstack);
+int val_fprintfv(FILE *file, valstruct_t *format, valstruct_t *v_args, int v_isstack, valstruct_t *f_args, int f_isstack) {
+  //throw_if(ERR_BADARGS,!(format->type == TYPE_STRING) || !val_is_lst(v_args) || !val_is_lst(f_args)); //TODO: argcheck
+
+  return val_fprintfv_(file,_val_str_begin(format),_val_str_len(format),v_args,v_isstack,f_args,f_isstack);
 }
-int val_sprintfv(val_t *buf, val_t *format, val_t *v_args, int v_isstack, val_t *f_args, int f_isstack) {
-  throw_if(ERR_BADARGS,!val_isstring(format) || !val_islist(v_args) || !val_islist(f_args));
-  return val_sprintfv_(buf,val_string_str(format),val_string_len(format),v_args,v_isstack,f_args,f_isstack);
+int val_sprintfv(valstruct_t *buf, valstruct_t *format, valstruct_t *v_args, int v_isstack, valstruct_t *f_args, int f_isstack) {
+  //throw_if(ERR_BADARGS,!val_isstring(format) || !val_islist(v_args) || !val_islist(f_args));
+  return val_sprintfv_(buf,_val_str_begin(format),_val_str_len(format),v_args,v_isstack,f_args,f_isstack);
 }
 
-int val_fprintfv_(FILE *file, const char *format, int len, val_t *v_args, int v_isstack, val_t *f_args, int f_isstack) {
+int val_fprintfv_(FILE *file, const char *format, int len, valstruct_t *v_args, int v_isstack, valstruct_t *f_args, int f_isstack) {
   int r;
   int rlen=0;
   int prevn = rlen;
@@ -369,11 +450,11 @@ int val_fprintfv_(FILE *file, const char *format, int len, val_t *v_args, int v_
         if ((r = _val_printf_takeval(v_args,v_isstack,vali,&val))) return r;
 
         if (fmt.field_width > 0 && !(fmt.flags & PRINTF_F_MINUS)) { //pad left
-          if (0>(r = _val_fprintf_padding(file,&fmt,val_sprintf_(val,NULL,&fmt),0))) return r; //first sprintf to NULL to get length for padding
+          if (0>(r = _val_fprintf_padding(file,&fmt,val_sprintf_(*val,NULL,&fmt),0))) return r; //first sprintf to NULL to get length for padding
           rlen += r;
         }
 
-        if (0>(r = val_fprintf_(val,file,&fmt))) {
+        if (0>(r = val_fprintf_(*val,file,&fmt))) {
           int tr;
           if (0>(tr=val_fprint_(file,fmt.spec-1,fmt.speclen+1))) return tr; //print failed conversion spec
           fprintf(stdout,"\nprintf conversion error for \"%.*s\"\n",fmt.speclen+1,fmt.spec-1);
@@ -384,14 +465,14 @@ int val_fprintfv_(FILE *file, const char *format, int len, val_t *v_args, int v_
           if (0>(r = _val_fprintf_padding(file,&fmt,r,1))) return r;
           rlen += r;
 
-          if (fmt.flags & PRINTF_F_POP) { if ((r = val_stacklist_pop(v_args,v_isstack,NULL))) return r; }
+          if (fmt.flags & PRINTF_F_POP) { if ((r = val_arglist_drop(v_args,v_isstack))) return r; }
         }
       }
     }
   }
   return r;
 }
-int val_sprintfv_(val_t *buf, const char *format, int len, val_t *v_args, int v_isstack, val_t *f_args, int f_isstack) {
+int val_sprintfv_(valstruct_t *buf, const char *format, int len, valstruct_t *v_args, int v_isstack, valstruct_t *f_args, int f_isstack) {
   int r;
   int rlen=0;
   int prevn = rlen;
@@ -418,11 +499,11 @@ int val_sprintfv_(val_t *buf, const char *format, int len, val_t *v_args, int v_
         if ((r = _val_printf_takeval(v_args,v_isstack,vali,&val))) return r;
 
         if (fmt.field_width > 0 && !(fmt.flags & PRINTF_F_MINUS)) { //pad left
-          if (0>(r = _val_sprintf_padding(buf,&fmt,val_sprintf_(val,NULL,&fmt),0))) return r; //first sprintf to NULL to get length for padding
+          if (0>(r = _val_sprintf_padding(buf,&fmt,val_sprintf_(*val,NULL,&fmt),0))) return r; //first sprintf to NULL to get length for padding
           rlen += r;
         }
 
-        if (0>(r = val_sprintf_(val,buf,&fmt))) {
+        if (0>(r = val_sprintf_(*val,buf,&fmt))) {
           int tr;
           if (0>(tr=val_sprint_(buf,fmt.spec-1,fmt.speclen+1))) return tr; //print failed conversion spec
           fprintf(stdout,"\nprintf conversion error for \"%.*s\"\n",fmt.speclen+1,fmt.spec-1);
@@ -433,7 +514,7 @@ int val_sprintfv_(val_t *buf, const char *format, int len, val_t *v_args, int v_
           if (0>(r = _val_sprintf_padding(buf,&fmt,r,1))) return r;
           rlen += r;
 
-          if (fmt.flags & PRINTF_F_POP) { if ((r = val_stacklist_pop(v_args,v_isstack,NULL))) return r; }
+          if (fmt.flags & PRINTF_F_POP) { if ((r = val_arglist_drop(v_args,v_isstack))) return r; }
         }
       }
     }
@@ -444,7 +525,7 @@ int val_sprintfv_(val_t *buf, const char *format, int len, val_t *v_args, int v_
 //int val_sprintf_truncated_(val_t *val, val_t *buf, const fmt_t *fmt, const fmt_t *trunc_fmt) {
 //  int max_chars = trunc_fmt;
 //  if (trunc_fmt->precision==0) return 0;
-//  else if (max_chars>0 && max_chars<3) return _fatal(BADARGS);
+//  else if (max_chars>0 && max_chars<3) return _fatal(ERR_BADARGS);
 //
 //  //fmt_t tfmt = printf_fmt_V;
 //  //tfmt.field_width = min_field_width;
@@ -494,7 +575,7 @@ int val_sprintfv_(val_t *buf, const char *format, int len, val_t *v_args, int v_
 //int val_sprintf_truncated_(val_t *val, val_t *buf, const fmt_t *fmt, int min_field_width, int max_chars, int left_align) {
 //  //TODO: refactor -- at least some of the args are probably optional (pull from fmt, which we currently ignore)
 //  if (max_chars==0) return 0;
-//  else if (max_chars>0 && max_chars<3) return _fatal(BADARGS);
+//  else if (max_chars>0 && max_chars<3) return _fatal(ERR_BADARGS);
 //
 //  fmt_t tfmt = printf_fmt_V;
 //  tfmt.field_width = min_field_width;
@@ -522,7 +603,7 @@ int val_sprintfv_(val_t *buf, const char *format, int len, val_t *v_args, int v_
 //            case TYPE_LIST:r = val_sprint_cstr(&tbuf,"(..)"); break;
 //            case TYPE_CODE: r = val_sprint_cstr(&tbuf,"[..]"); break;
 //            //case TYPE_BYTECODE: r = val_sprint_cstr(&tbuf,"(..)"); break;
-//            default: return _fatal(FATAL); //shouldn't get here
+//            default: return _fatal(ERR_FATAL); //shouldn't get here
 //          }
 //        } else {
 //          switch(val->type) {
@@ -530,7 +611,7 @@ int val_sprintfv_(val_t *buf, const char *format, int len, val_t *v_args, int v_
 //            case TYPE_LIST:r = val_sprint_cstr(&tbuf,"...)"); break;
 //            case TYPE_CODE: r = val_sprint_cstr(&tbuf,"...]"); break;
 //            //case TYPE_BYTECODE: r = val_sprint_cstr(&tbuf,"...)"); break;
-//            default: return _fatal(FATAL); //shouldn't get here
+//            default: return _fatal(ERR_FATAL); //shouldn't get here
 //          }
 //        }
 //      } else {
@@ -564,37 +645,6 @@ int val_sprintfv_(val_t *buf, const char *format, int len, val_t *v_args, int v_
 
 
 
-int val_fprint_(FILE *file, const char *str, unsigned int len) {
-  int r;
-  throw_if(ERR_IO_ERROR,0>(r=fprintf(file,"%.*s",len,str)));
-  return r;
-}
-int val_fprint_cstr(FILE *file, const char *str) {
-  int r;
-  throw_if(ERR_IO_ERROR,0>(r=fprintf(file,"%s",str)));
-  return r;
-}
-
-int val_sprint_(val_t *buf, const char *str, unsigned int len) {
-  if (buf) {
-    int r;
-    if ((r = val_string_cat_(buf,str,len))) return r;
-    else return len;
-  } else {
-    return len;
-  }
-}
-int val_sprint_cstr(val_t *buf, const char *str) {
-  int len = strlen(str);
-  if (buf) {
-    int r;
-    if ((r = val_string_cat_(buf,str,len))) return r;
-    else return len;
-  } else {
-    return len;
-  }
-}
-
 int _val_fprintf_padding(FILE *file, const fmt_t *fmt, int len, int right) {
   throw_if(ERR_BADARGS,len < 0);
   if (len >= fmt->field_width) return 0;
@@ -626,7 +676,7 @@ int _val_fprintf_padding(FILE *file, const fmt_t *fmt, int len, int right) {
   }
   return rlen;
 }
-int _val_sprintf_padding(val_t *buf, const fmt_t *fmt, int len, int right) {
+int _val_sprintf_padding(valstruct_t *buf, const fmt_t *fmt, int len, int right) {
   throw_if(ERR_BADARGS,len < 0);
   if (len >= fmt->field_width) return 0;
   if (!right) { //left side
@@ -635,17 +685,17 @@ int _val_sprintf_padding(val_t *buf, const fmt_t *fmt, int len, int right) {
     if (!(fmt->flags & PRINTF_F_MINUS)) return 0; //padding is left
   }
 
-  char padc = ' ';
-  if (fmt->flags & PRINTF_F_ZERO && !(fmt->flags & PRINTF_F_MINUS)) {
-    //zero left-padding (unless numeric and precision set) (see fprintf_padding)
-    switch(fmt->conversion) {
-      case 'd': case 'i': case 'o': case 'u': case 'x': case 'X': if (fmt->precision>=0) break;
-      default: padc = '0'; break;
-    }
-  }
   if (buf) {
+    char padc = ' ';
+    if (fmt->flags & PRINTF_F_ZERO && !(fmt->flags & PRINTF_F_MINUS)) {
+      //zero left-padding (unless numeric and precision set) (see fprintf_padding)
+      switch(fmt->conversion) {
+        case 'd': case 'i': case 'o': case 'u': case 'x': case 'X': if (fmt->precision>=0) break;
+        default: padc = '0'; break;
+      }
+    }
     int r;
-    if ((r = val_string_padright(buf,padc,fmt->field_width-len))) return r;
+    if ((r = _val_str_padright(buf,padc,fmt->field_width-len))) return r;
   }
   return fmt->field_width-len;
 }
@@ -829,7 +879,8 @@ int _val_printf_parse(
 
     //whats left should be conversion type
     fmt->conversion = *f;
-    fmt->speclen=++rlen; //+1 for conversion type
+    rlen++; //for conversion type
+    fmt->speclen=f-fmt->spec+1;
     //if ((unsigned int)*vali >= val_list_len(args)) return -1;
     *format += rlen;
     *len -= rlen;
@@ -838,58 +889,59 @@ int _val_printf_parse(
   }
 }
 
-err_t _val_printf_fmt_takeargs(fmt_t *fmt, int precision_arg, int field_width_arg, val_t *args, int isstack) {
-  if (precision_arg>0) {
-    throw_if(ERR_BADARGS,(unsigned int)precision_arg > val_list_len(args));
-    val_t *v = val_stacklist_get(args,isstack,precision_arg-1);
-    throw_if(ERR_BADARGS,!val_isint(v));
-    fmt->field_width = val_int(v);
-  } else if (precision_arg==0) { //* format, pop top of stack to get min field width. must be int val
-    throw_list_empty(args);
-    val_t *v = val_stacklist_get(args,isstack,0);
-    throw_if(ERR_BADARGS,!val_isint(v));
-    fmt->field_width = val_int(v);
-    val_stacklist_pop(args,isstack,NULL);
+err_t _val_printf_fmt_takeargs(fmt_t *fmt, int precision_arg, int field_width_arg, valstruct_t *args, int isstack) {
+  if (field_width_arg>0) {
+    throw_if(ERR_BADARGS,(unsigned int)field_width_arg > _val_lst_len(args));
+    val_t *v = val_arglist_get(args,isstack,field_width_arg-1);
+    throw_if(ERR_BADARGS,!val_is_int(*v));
+    fmt->field_width = __val_int(*v);
+  } else if (field_width_arg==0) {
+    throw_lst_empty(args);
+    val_t *v = val_arglist_get(args,isstack,0);
+    throw_if(ERR_BADARGS,!val_is_int(*v));
+    fmt->field_width = __val_int(*v);
+    val_arglist_drop(args,isstack);
   }
 
-  if (field_width_arg>0) {
-    throw_if(ERR_BADARGS,(unsigned int)field_width_arg > val_list_len(args));
-    val_t *v = val_stacklist_get(args,isstack,field_width_arg-1);
-    throw_if(ERR_BADARGS,!val_isint(v));
-    fmt->precision = val_int(v);
-  } else if (field_width_arg==0) {
-    throw_list_empty(args);
-    val_t *v = val_stacklist_get(args,isstack,0);
-    throw_if(ERR_BADARGS,!val_isint(v));
-    fmt->precision = val_int(v);
-    val_stacklist_pop(args,isstack,NULL);
+  if (precision_arg>0) {
+    throw_if(ERR_BADARGS,(unsigned int)precision_arg > _val_lst_len(args));
+    val_t *v = val_arglist_get(args,isstack,precision_arg-1);
+    throw_if(ERR_BADARGS,!val_is_int(*v));
+    fmt->precision = __val_int(*v);
+  } else if (precision_arg==0) { //* format, pop top of stack to get min field width. must be int val
+    throw_lst_empty(args);
+    val_t *v = val_arglist_get(args,isstack,0);
+    throw_if(ERR_BADARGS,!val_is_int(*v));
+    fmt->precision = __val_int(*v);
+    val_arglist_drop(args,isstack);
   }
+
   return 0;
 }
 
-err_t _val_printf_takeval(val_t *args, int isstack, int vali, val_t **val) {
+err_t _val_printf_takeval(valstruct_t *args, int isstack, int vali, val_t **val) {
   if (vali == -1) vali = 0;
   else if (vali > 0) vali--;
-  throw_if(ERR_BADARGS,(unsigned int)vali >= val_list_len(args));
-  *val = val_stacklist_get(args,isstack,vali);
+  throw_if(ERR_BADARGS,(unsigned int)vali >= _val_lst_len(args));
+  *val = val_arglist_get(args,isstack,vali);
   return 0;
 }
 
-int _val_printf_special(fmt_t *fmt, int vali, val_t *args, int isstack, int rlen, int *prevn) {
+int _val_printf_special(fmt_t *fmt, int vali, valstruct_t *args, int isstack, int rlen, int *prevn) {
   int r;
   if (fmt->conversion == '_') {
-    if ((r = val_stacklist_pop(args,isstack,NULL))) return r;
+    if ((r = val_arglist_drop(args,isstack))) return r;
   } else if (fmt->conversion == 'n') {
-    throw_if(ERR_BADARGS,vali > 0 && ((unsigned int)vali > val_list_len(args)));
+    throw_if(ERR_BADARGS,vali > 0 && ((unsigned int)vali > _val_lst_len(args)));
 
-    val_t t;
     //we use stack push instead of isstack so field widths can be pushed on right and args popped from left
-    if (fmt->flags & PRINTF_F_MINUS) r = val_stack_push(args,val_int_init(&t,rlen-*prevn));
-    else r = val_stack_push(args,val_int_init(&t,rlen));
+    if (fmt->flags & PRINTF_F_MINUS) r = _val_lst_rpush(args,__int_val(rlen-*prevn));
+    else r = _val_lst_rpush(args,__int_val(rlen));
     if (r) return r;
 
     if (vali > 0) {
-      if ((r = val_stack_buryn(args,vali))) return r;
+      //if ((r = val_stack_buryn(args,vali))) return r;
+      return _throw(ERR_NOT_IMPLEMENTED); //FIXME: IMPLEMENTME
     }
     *prevn = rlen;
     return 1;

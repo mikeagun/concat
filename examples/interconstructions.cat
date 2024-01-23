@@ -1,0 +1,117 @@
+#Copyright (C) 2024 D. Michael Agun
+#
+#Licensed under the Apache License, Version 2.0 (the "License");
+#you may not use this file except in compliance with the License.
+#You may obtain a copy of the License at
+#
+#http://www.apache.org/licenses/LICENSE-2.0
+#
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+
+# various combinator interconstructions
+
+
+#builds a reasonable base vocabulary from only the combinators: pop dup swap dip if_ lpop lpush
+#  - we still include other basic operations like +/-/etc
+
+
+# == base combinators ==
+#pop         #| A --
+#dup         #| A -- A A
+#swap        #| A B -- B A
+#dip         #| A [B] -- B A
+#if_         #| TRUE [A] -- A; FALSE [A] --
+#lpop        #| [A B] -- A [B]
+#lpush       #| A [B] -- [A B]
+#
+# == "nice to have" combinators ==
+#rpop        #| A [B] -- [B A]
+#rpush       #| A [B] -- [B A]
+#cat
+#protect
+#eval
+#only
+#unless
+#
+# == other base operators ==
+# +
+# -
+# *
+# /
+
+
+# === basic combinator interconstructions ===
+
+# general, but suboptimal protect function -- if not ispush, wrap in list and create quotation that expands to element from list
+#[ dup ispush not [ () lpush [lpop pop] lpush ] if_ ] \protect def
+
+#protect function handling the various cases
+# - requires lpush to work with idents (or could change to use cat instead if that works with idents)
+[
+  dup ispush not [
+    dup isident [
+      \\ swap lpush #could swap lpush with cat
+    ] [
+      dup iscode [
+        [] lpush
+      ] [
+        () lpush [lpop pop] lpush
+      ] ifelse_
+    ] ifelse_
+  ] if_
+] \protect def
+
+#define dip in terms of eval (and protect), or eval in terms of dip
+#[ swap protect [] lpush lpush eval ] \dip def
+#OR
+#[ 0 swap dip pop ] \eval def
+
+[ \dup dip swap ] \dup2 def
+
+
+[ swap \dip dip ] \dip2 def
+
+[ swap \swap dip swap ] \flip3 def
+
+
+
+# === list op interconstructions ===
+[ () lpush ] \wrap def
+[ () lpush lpush ] \wrap2 def
+
+[ [] lpush ] \quote def
+
+
+
+# === interconstructions for conditionals ===
+# - starting from if_, we define if, ifelse_, ifelse, only, unless, and, or
+
+[ #| [cond] [then]
+  #[ dup ispush not \eval if_ ] dip if_ # this version conditionally evals, but eval of push type is no-op, so no need for conditional
+  \eval dip if_
+] \if def # [TRUE] [then] -- then | [FALSE] [then] --
+
+[ #| cond [then] [else]
+  flip3 \swap if_ pop eval
+] \ifelse_ def  
+
+[ #| [cond] [then] [else]
+  \eval dip2 ifelse_
+] \ifelse def
+
+
+[ #| cond [A]
+  dup2 [ swap pop eval ] [ pop ] ifelse_
+] \only def # TRUE [A] -- A | FALSE [A] -- FALSE
+
+[
+  dup2 [ pop ] [ swap pop eval ] ifelse_
+] \unless def # TRUE [A] -- TRUE | FALSE [A] -- A
+
+#TODO: do we even keep these??? (see notes in code, vm.c/opcodes.h)
+[swap dip only bool] \and def
+[swap dip unless bool] \or def

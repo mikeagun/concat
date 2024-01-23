@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 #include "val_list.h"
 #include "vm_err.h"
 #include "vm_debug.h"
+#include "opcodes.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,15 +26,40 @@
 //This file describes the main interpreter for concat
 //  - takes command line args
 //  - sets up debugging
-//  - sets interactive mode (read from stdin, restart VM on exception)
+//  - sets interactive mode -- read from stdin, restart vm (keeping stack & dict) on exception
 //  - takes -e "expression" args for commandline concat code to eval (append onto work stack)
 //  - takes -f filename args for files to append onto the work stack
 //concat interpreter
+//- TODO: long integer support (at least 64 bits)
 //- TODO: finish bytecode, and implement ephemeral/persistant bytecode -- light embedded vms may only read vals/bytecode (not parse text)
 //- TODO: optimization (code optimization tools and controls for when optimization performed)
 //  - figure out natives needed, rest can be implemented as concat scripts/libraries
 //  - already have natives for inlining, need tools for typical use cases
+//  - can use stack effects in opcodes.h to determine safe optimizations (may need to reformat/rewrite the stack effects)
 //- TODO: proper getline (or other pretty repl) interface to the concat interpreter
+//  - some options: handle it in main() when reading from tty, add repl opcode(s), add tty flag on input files, implement repl in concat and load it in main() and when starting debugging if input is tty
+//- TODO: way to attach filename, line, and position to val read from file for debugging purposes
+//  - tag code from stdin the same way
+//  - add with debug info (will work for all valstruct types, and that seems sufficient)
+//- TODO: threadsafety -- dict, memory pools, file IO
+//  - for dict the other option is to do a deep clone of any scopes that may be modified outside the thread, or mark dict immutable
+//- TODO: message passing (right now we have everything we need with ref, but we should also support a message passing paradigm)
+//  - e.g. threadsafe linked list we can push/pop, or pipe-like interface
+//- TODO: code review of our massive collection of macros (i.e. keep/move to function/refactor)???
+//  - original (very clean) implementation was plagued by memory,dispatch,function call, and typechecking overheads as the dominant performance bottlenecks throughout the vm, motivating a total rewrite
+//  - I probably went to far in the rewrite, so should do a code review to rebalance performance and readability/maintainability
+//
+//- TODO: standard libraries -- concat code in a standard location we can reuse (prob with a search path so it is installation agnostic)
+//- TODO: include file with -l to use include searchpath
+//standard library ideas:
+//  - debug - friendly debugging tools based on the low level debugging support
+//  - tty - so we can implement readline and curses style applications
+//  - http - build on low level networking interface (which we still need to design) to support REST and other HTTP applications
+//  - time - time parsing, formatting, and math
+//  - formatting - text/string formatting library
+//  - analyze - code analysis (e.g. static analysis to determine stack effects)
+//  - optimize - code optimization
+//  - oop - object oriented programming library
 
 //int readline(char *buffer, int size) {
 //  if (!fgets(buffer,size,stdin)) {
@@ -47,6 +73,7 @@
 //}
 
 int main(int argc, char *argv[]) {
+  concat_init();
   vm_t vm;
   err_t r;
   val_t t;
@@ -84,13 +111,11 @@ int main(int argc, char *argv[]) {
         if (argi < argc) {
           arg = argv[argi++];
           expr=1;
-          val_code_init(&t);
-          r = vm_compile_input(&vm,arg,strlen(arg),&t);
-          if (r) {
+          t = val_empty_code();
+          if ((r = vm_parse_input(&vm,arg,strlen(arg),__lst_ptr(t)))) {
             printf("ERROR: failed to compile expression\n"); return 1;
           }
-          r = vm_wappend(&vm,&t);
-          if (r) {
+          if ((r = vm_wappend(&vm,t))) {
             printf("ERROR: failed to append expr to work\n"); return 1;
           }
         } else {
@@ -102,7 +127,7 @@ int main(int argc, char *argv[]) {
           expr=1;
           val_t file;
           if ((r = val_file_init(&file,arg,"r"))
-             || (r = vm_wappend(&vm,&file))) {
+             || (r = vm_wappend(&vm,file))) {
             printf("failed to open file '%s'\n",arg);
             return 1;
           }
@@ -116,15 +141,17 @@ int main(int argc, char *argv[]) {
           printf("ERROR: could not set debugger\n");
           return 1;
         }
+        _val_lst_rdrop(&vm.work); //drop stdin & catch_interactive from commandline created debugger vm
+        _val_lst_rdrop(&vm.cont); //TODO: add alternate debug wrap function
         expr=0; //reset expr so final debugger will get stdin (unless we give it expr)
       } else if (!strcmp(arg,"-x")) { //evaluate all queued work up to this point
-        if ((r = vm_dowork(&vm,-1))) {
+        if ((r = vm_dowork(&vm))) {
           err_fprintf(stderr,r);
           printf("ERROR in pre-evaluation -x\n");
           return r;
         }
       } else if (!strcmp(arg,"-de")) { //trap out to debugger on unhandled exception
-        r = vm_cpush_debugfallback(&vm);
+        r = vm_cpush(&vm,__op_val(OP_catch_debug));
         if (r) {
           printf("ERROR: failed to set debug-catch mode");
           return 1;
@@ -136,7 +163,7 @@ int main(int argc, char *argv[]) {
         return 1;
       }
     } else if (arg[0] == '-') { //single -, grab stdin
-      r = vm_wappend(&vm,val_file_init_stdin(&t));
+      r = vm_wappend(&vm,val_file_stdin_ref());
       interactive=1;
       if (r) {
         printf("ERROR: could load stdin\n");
@@ -152,7 +179,7 @@ int main(int argc, char *argv[]) {
     while(argi<argc) {
       const char *arg = argv[argi++];
       if (!strcmp(arg,"-")) {
-        r = vm_wappend(&vm,val_file_init_stdin(&t));
+        r = vm_wappend(&vm,val_file_stdin_ref());
         interactive=1;
         if (r) {
           printf("ERROR: could load stdin\n");
@@ -162,16 +189,18 @@ int main(int argc, char *argv[]) {
         val_t tfile;
         if ((r = val_file_init(&tfile,arg,"r"))) {
           printf("ERROR: failed to open file '%s'\n",arg);
-          return 1;
-        } else if ((r = vm_wappend(&vm,&tfile))) {
-          val_destroy(&tfile);
+          vm_pfatal(r);
+          return r;
+        } else if ((r = vm_wappend(&vm,tfile))) {
+          val_destroy(tfile);
           printf("ERROR appending work\n");
-          return 1;
+          vm_pfatal(r);
+          return r;
         }
       }
     }
   } else if (!expr) { //if no args just read stdin
-    r = vm_wappend(&vm,val_file_init_stdin(&t));
+    r = vm_wappend(&vm,val_file_stdin_ref());
     interactive=1;
     if (r) {
       printf("ERROR: could load stdin\n");
@@ -179,14 +208,15 @@ int main(int argc, char *argv[]) {
     }
   }
   if (interactive) {
-    r = vm_set_interactive_debug(&vm);
-    if (r) {
+    if ((r = vm_cpush(&vm,__op_val(OP_catch_interactive)))) {
+    //if ((r = vm_set_interactive_debug(&vm))) { }
+      printf("ERROR: could not add interactive catch to cont stack\n");
       vm_pfatal(r);
       return r;
     }
   }
 
-  r = vm_dowork(&vm,-1);
+  r = vm_dowork(&vm);
   if (err_isfatal(r)) {
     vm_pfatal(r);
     return -1;

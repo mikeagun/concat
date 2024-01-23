@@ -1,4 +1,4 @@
-#Copyright (C) 2020 D. Michael Agun
+#Copyright (C) 2024 D. Michael Agun
 #
 #Licensed under the Apache License, Version 2.0 (the "License");
 #you may not use this file except in compliance with the License.
@@ -12,9 +12,11 @@
 #See the License for the specific language governing permissions and
 #limitations under the License.
 
-#printf implementation in concat
+#simple printf implementation in concat
+# - Note that concat has a complete printf implementation already, this is an example of implementing one from scratch
+# - FIXME: this is from old implementation needs updating to match new impl
 #
-#Currently supported escapes
+#Supported escapes
 #  - %%  - literal %
 #  - %v  - print
 #  - %V  - print code

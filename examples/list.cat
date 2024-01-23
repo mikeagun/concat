@@ -1,4 +1,4 @@
-#Copyright (C) 2020 D. Michael Agun
+#Copyright (C) 2024 D. Michael Agun
 #
 #Licensed under the Apache License, Version 2.0 (the "License");
 #you may not use this file except in compliance with the License.
@@ -14,13 +14,14 @@
 
 # Library of functions over lists
 # - Some of these are the actual implementations for the concat builtins for various operations (e.g. filter,map,mmap)
-# - For others there are native implementations for efficiency, but these versions could also work
+# - For others there are native implementations for performance, with equivalent stack effects
+#   - the difference being that different vals may be hidden different places on the work stack between versions
 
 #
 #filter list elements through condition
 [ dup2 clearlist flip3 [ flip3 dup3 flip3 dup dip3 [ dig2 \rpush \popd ifelse] dip ] each pop ] \filter def
 #[                      #| list [cond]
-#  dup2 clearlist flip3 #| [] [cond] list (same type of list as orig)
+#  dup2 clearlist flip3 #| [] [cond] list (empty list same type as orig)
 #  [                    #| [...] [cond] el
 #    flip3 dup3         #| el [cond] [...] el
 #    flip3 dup          #| el el [...] [cond] [cond]
@@ -29,7 +30,7 @@
 #      dig2             #| el [...] bool
 #      [                #| el [...] -- keep val
 #        rpush          #| [....]
-#      ] [              #| el [...] -- throw val
+#      ] [              #| el [...] -- drop val
 #        popd           #| [...]
 #      ] ifelse
 #    ] dip              #| [....] [cond]
@@ -85,7 +86,7 @@
 #list clear
 
 #
-[ swapd each ] \reduce def #| (a b c d) init [body] -- init a body b body c body
+[ swapd each ] \reduce def #| (a b c) init [body] -- init a body b body c body
 
 #run function on each element of list, and then append result to new list
 #since list results are concatenated, can produce zero or more elements in new list for each el of old list
@@ -338,9 +339,20 @@
 ] \all def #whether all elements of list pass condition
 
 
-[                 #| (l1) (l2) [A]
-  [               #| (l1) (l2) [L]
-  ] dup eval      #| (list)
+[                       #| (l1) (l2) [A]
+  dup3 clearlist        #| (l1) (l2) [A] ()
+  [5 dupn empty]
+  [4 dupn empty] or [   # if either list empty, just return empty list
+    pop pop clearlist   #| ()
+  ] [
+    [                   #| (l1) (l2) [A] (l3...) [L]
+      [                 #| (l1) (l2) (l3...) [L]
+        swap [          #| (l1) (l2) [L]
+
+        ] dip           #
+      ] sip             #| (l1) (l2) (l3...el1el2L) [L]
+    ] dup eval          #| (l3)
+  ] ifelse
 #  [               #| (list) [A] [L]
 #    dup3 size     #| (list) [A] [L] n
 #    [             #| (el ...) [A] [L]
@@ -352,6 +364,30 @@
 #    ] if
 #  ]               #| (list) [A] [L]
 #  dup eval        #| (list) [A] [L] L
-#  pop pop pop
+#  pop pop pop     #| (l3) (each el of l3 is eval of [l1 l2 A])
   
 ] \zipwith def #combine two lists into one using given val
+
+
+[ dup [ swapd 0 swap swapnth bury2 \eval dip ] dip swapd setnth ] \mapnth def
+#[                  #| [list] [A] n
+#  dup [            #| [list] [A] n
+#    swapd          #| [A] [list] n
+#    0 swap swapnth #| [A] [list] nth -- nth in [list] swapped with 0 (so we don't need to copy)
+#    bury2          #| nth [A] [list]
+#    \eval dip      #| nthA [list]
+#  ] dip            #| nthA [list] n
+#  swapd setnth     #| [newlist]
+#] \mapnth def      # ( [...] [A] n -- [...] )
+
+#this version of mapnth only requires dnth and setnth (not swapnth), buf creates a clone of the mapped element
+[ dup [ swapd dnth bury2 \eval dip ] dip swapd setnth ] \mapnth1 def
+#[               #| [list] [A] n
+#  dup [         #| [list] [A] n
+#    swapd       #| [A] [list] n
+#    dnth        #| [A] [list] nth
+#    bury2       #| nth [A] [list]
+#    \eval dip   #| nthA [list]
+#  ] dip         #| nthA [list] n
+#  swapd setnth  #| [newlist]
+#] \mapnth def   # ( [...] [A] n -- [...] )

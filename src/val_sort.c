@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -13,15 +13,14 @@
 //limitations under the License.
 
 #include "val_sort.h"
-#include "val_compare.h"
 
-void val_qsortp(val_t *p, unsigned int size, int (compare_lt)(val_t *lhs, val_t *rhs)) {
+void val_qsortp(val_t *p, unsigned int size, int (compare_lt)(val_t lhs, val_t rhs)) {
   if (size < 2) return;
 
   //we are using the median of first/last/middle for the pivot
-  val_t *pval = &p[0];
-  val_t *mid = &p[size/2];
-  val_t *last = &p[size-1];
+  val_t pval = p[0];
+  const val_t mid = p[size/2];
+  const val_t last = p[size-1];
   unsigned int i=0, j=size;
 
   if ((compare_lt(pval,mid) && compare_lt(mid,last)) || (compare_lt(last,mid) && compare_lt(mid,pval)) ) pval=mid;
@@ -29,8 +28,8 @@ void val_qsortp(val_t *p, unsigned int size, int (compare_lt)(val_t *lhs, val_t 
 
   while (1) {
     j--;
-    while (compare_lt(pval,&p[j])) j--; //find last record that should go before pivot
-    while (compare_lt(&p[i],pval)) i++; //find first record that should go after pivot
+    while (compare_lt(pval,p[j])) j--; //find last record that should go before pivot
+    while (compare_lt(p[i],pval)) i++; //find first record that should go after pivot
     if  (i < j) { //swap (if the list isn't fully partitioned)
       val_swap(&p[i],&p[j]);
     } else {
@@ -46,9 +45,9 @@ void val_qsort(val_t *p, unsigned int size) {
     if (size < 2) return;
 
     //we are using the median of first/last/middle for the pivot
-    val_t *pval = &p[0];
-    val_t *mid = &p[size/2];
-    val_t *last = &p[size-1];
+    val_t pval = p[0];
+    const val_t mid = p[size/2];
+    const val_t last = p[size-1];
     unsigned int i=0, j=size;
 
     if ((val_lt(pval,mid) && val_lt(mid,last)) || (val_lt(last,mid) && val_lt(mid,pval)) ) pval=mid;
@@ -56,8 +55,8 @@ void val_qsort(val_t *p, unsigned int size) {
 
     while (1) {
       j--;
-      while (val_lt(pval,&p[j])) j--; //find last record that should go before pivot
-      while (val_lt(&p[i],pval)) i++; //find first record that should go after pivot
+      while (val_lt(pval,p[j])) j--; //find last record that should go before pivot
+      while (val_lt(p[i],pval)) i++; //find first record that should go after pivot
       if  (i < j) { //swap (if the list isn't fully partitioned)
         val_swap(&p[i],&p[j]);
       } else {
@@ -73,9 +72,9 @@ void val_rqsort(val_t *p, unsigned int size) {
     if (size < 2) return;
 
     //we are using the median of first/last/middle for the pivot
-    val_t *pval = &p[0];
-    val_t *mid = &p[size/2];
-    val_t *last = &p[size-1];
+    val_t pval = p[0];
+    const val_t mid = p[size/2];
+    const val_t last = p[size-1];
     unsigned int i=0, j=size;
 
     if ((val_gt(pval,mid) && val_gt(mid,last)) || (val_gt(last,mid) && val_gt(mid,pval)) ) pval=mid;
@@ -83,8 +82,8 @@ void val_rqsort(val_t *p, unsigned int size) {
 
     while (1) {
       j--;
-      while (val_gt(pval,&p[j])) j--; //find last record that should go before pivot
-      while (val_gt(&p[i],pval)) i++; //find first record that should go after pivot
+      while (val_gt(pval,p[j])) j--; //find last record that should go before pivot
+      while (val_gt(p[i],pval)) i++; //find first record that should go after pivot
       if  (i < j) { //swap (if the list isn't fully partitioned)
         val_swap(&p[i],&p[j]);
       } else {

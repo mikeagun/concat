@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -15,35 +15,25 @@
 #ifndef __VAL_REF_INTERNAL_H__
 #define __VAL_REF_INTERNAL_H__ 1
 #include "val_ref.h"
-#include <semaphore.h>
 
-struct val_ref_struct {
-  val_t val;
-  unsigned int refcount;
-  sem_t lock;
-  sem_t wait;
-  unsigned int nwait;
-};
+val_t* _val_ref_val(valstruct_t *val);
 
-struct val_ref_struct* _val_ref_ref(val_t *val);
-val_t* _val_ref_val(val_t *val);
+err_t _ref_lock(valstruct_t *ref);
+err_t _ref_trylock(valstruct_t *ref);
+err_t _ref_unlock(valstruct_t *ref);
 
-err_t _ref_lock(struct val_ref_struct *ref);
-err_t _ref_trylock(struct val_ref_struct *ref);
-err_t _ref_unlock(struct val_ref_struct *ref);
+err_t _ref_signal(valstruct_t *ref);
+err_t _ref_broadcast(valstruct_t *ref);
+err_t _ref_wait(valstruct_t *ref);
 
-err_t _ref_signal(struct val_ref_struct *ref);
-err_t _ref_broadcast(struct val_ref_struct *ref);
-err_t _ref_wait(struct val_ref_struct *ref);
+void _val_ref_swap(valstruct_t *ref, val_t *val);
 
-void _val_ref_swap(val_t *ref, val_t *val);
+err_t _val_ref_lock(valstruct_t *ref);
+err_t _val_ref_trylock(valstruct_t *ref);
+err_t _val_ref_unlock(valstruct_t *ref);
 
-err_t _val_ref_lock(val_t *ref);
-err_t _val_ref_trylock(val_t *ref);
-err_t _val_ref_unlock(val_t *ref);
-
-err_t _val_ref_signal(val_t *val);
-err_t _val_ref_broadcast(val_t *val);
-err_t _val_ref_wait(val_t *val);
+err_t _val_ref_signal(valstruct_t *val);
+err_t _val_ref_broadcast(valstruct_t *val);
+err_t _val_ref_wait(valstruct_t *val);
 
 #endif

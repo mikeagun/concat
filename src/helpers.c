@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -179,7 +179,7 @@ int is_close_group(const char c) { //removed } since that is the scopestack pop 
 }
 
 int is_number(const char *s, unsigned int len) {
-  int state = 0; //TODO: clean this up with enum
+  int state = 0;
   // 0    1          2          3       4      5    6   7    8      9
   //init +/-  leading_decimal digits decimal digits e  +/- digits space
   for(; len; --len,++s) {

@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -14,102 +14,102 @@
 
 #ifndef __VAL_STRING_H__
 #define __VAL_STRING_H__ 1
+
 #include "val.h"
 
-#include <stdint.h> //for hashes
+#include <string.h>
+
+//gcc allows initialization of flexible array members, but c standard doesn't (i.e. .p below)
+//#define CONST_STRING(name,string) sbuf_t name##_buf = { .size = sizeof(string)-1, .refcount = 1, .p = string }; valstruct_t name##_ = { .type = TYPE_STRING, .v.str = { .off = 0, .len = NONE, .buf = &name##_buf } };
+//CONST_STRING(val_const_concat,"concat");
+//sbuf_t val_const_concat_buf = { .size = sizeof("concat")-1, .refcount = 1, .p = "concat" };
+//valstruct_t val_const_concat_ = { .type = TYPE_STRING, .v.str = { .off = 0, .len = NONE, .buf = &val_const_concat_buf } };
+
+int _val_str_empty(valstruct_t *str);
+int _val_str_small(valstruct_t *str);
+
+char* _val_str_buf(valstruct_t *v);
+char* _val_str_begin(valstruct_t *v);
+char* _val_str_off(valstruct_t *v, int i);
+char* _val_str_end(valstruct_t *v);
+unsigned int _val_str_len(valstruct_t *v);
+unsigned int _val_str_size(valstruct_t *v);
+
+int _val_str_escaped(valstruct_t *str); //whether char char of string is '\'
+unsigned int _val_str_escaped_levels(valstruct_t *str); //how many leading '\' symbols are there
+void _val_str_unescape(valstruct_t *str); //delete first char from string -- ASSUMES non-empty
+err_t _val_str_escape(valstruct_t *str); //insert '\' at start of string (i.e. to escape ident)
+
+int _val_str_simpleprint(valstruct_t *v);
+int _val_str_fprint_quoted(valstruct_t *v, FILE *file,int precision);
+int _val_str_sprint_quoted(valstruct_t *v, valstruct_t *buf, int precision);
+
+val_t _strval_alloc(enum val_type type);
+err_t _strval_init(val_t *v, enum val_type type);
+err_t val_string_init_cstr(val_t *val, const char *str, unsigned int n);
+err_t val_ident_init_cstr(val_t *val, const char *str, unsigned int n);
+err_t val_string_init_quoted(val_t *val, const char *str, unsigned int len);
+val_t val_string_temp_cstr(const char *str, unsigned int n);
+
+sbuf_t* _sbuf_alloc(unsigned int size);
+void _sbuf_release(sbuf_t *buf);
+
+void _val_str_clone(valstruct_t *ret, valstruct_t *str);
+void _val_str_destroy(valstruct_t *str);
+void _val_str_destroy_(valstruct_t *str);
+
+val_t val_empty_string();
+val_t val_empty_ident();
+
+err_t val_string_init_empty(val_t *v);
+err_t val_ident_init_empty(val_t *v);
+
+err_t _val_str_lreserve(valstruct_t *v, unsigned int n);
+err_t _val_str_rreserve(valstruct_t *v, unsigned int n);
+err_t _val_str_lextend(valstruct_t *v, unsigned int n, char **p);
+err_t _val_str_rextend(valstruct_t *v, unsigned int n, char **p);
+
+//TODO: reconsider rcat name -- this seems opposite from other names like rpush...
+err_t _val_str_cat(valstruct_t *str, valstruct_t *suffix);
+err_t _val_str_cat_cstr(valstruct_t *str, const char *s, unsigned int len);
+err_t _val_str_rcat_cstr(valstruct_t *str, const char *s, unsigned int len);
+err_t _val_str_cat_ch(valstruct_t *str, char c);
+err_t _val_str_rcat_ch(valstruct_t *str, char c);
+err_t _val_str_cat_copy(valstruct_t *str, valstruct_t *suffix);
+err_t _val_str_rcat(valstruct_t *str, valstruct_t *prefix);
+err_t _val_str_rcat_copy(valstruct_t *str, valstruct_t *prefix);
+
+//adds a null after end-of-string (if not already there) so we can use as cstr
+err_t _val_str_make_cstr(valstruct_t *str);
+
+void _val_str_clear(valstruct_t *str);
+void _val_str_substr(valstruct_t *str, unsigned int off, unsigned int len);
+void _val_str_trim(valstruct_t *str);
+err_t _val_str_splitn(valstruct_t *str, val_t *rhs, unsigned int off);
+//unsafe cloned substring (doesn't do bounds checking)
+err_t _val_str_substr_clone(val_t *ret, valstruct_t *str, unsigned int off, unsigned int len);
+
+int _val_str_compare(valstruct_t *lhs, valstruct_t *rhs);
+int _val_str_lt(valstruct_t *lhs, valstruct_t *rhs);
+int _val_str_eq(valstruct_t *lhs, valstruct_t *rhs);
+int _val_str_cstr_compare(valstruct_t *str, const char *cstr,unsigned int len);
+int _val_str_strcmp(valstruct_t *str, const char *cstr);
+
+int _val_str_find(valstruct_t *str, const char *substr, unsigned int len);
+int _val_str_findstr(valstruct_t *str, valstruct_t *substr);
+
+int _val_str_padright(valstruct_t *str, char c, int n);
+int _val_str_padleft(valstruct_t *str, char c, int n);
+
+uint32_t _val_str_hash32(valstruct_t *str);
+uint64_t _val_str_hash64(valstruct_t *str);
+uint32_t _val_cstr_hash32(const char *s, unsigned int n);
+uint64_t _val_cstr_hash64(const char *s, unsigned int n);
 
 
-void val_string_init_handlers(struct type_handlers *h);
+int val_string_fprintf(valstruct_t *v,FILE *file, const struct printf_fmt *fmt);
+int val_string_sprintf(valstruct_t *v,valstruct_t *buf, const struct printf_fmt *fmt);
+int val_ident_fprintf(valstruct_t *v,FILE *file, const struct printf_fmt *fmt);
+int val_ident_sprintf(valstruct_t *v,valstruct_t *buf, const struct printf_fmt *fmt);
 
-void val_string_init(val_t *val);
-err_t val_string_init_(val_t *val, const char *str, unsigned int len);
-err_t val_string_init_cstr(val_t *val, const char *str);
-err_t val_string_init_dquoted(val_t *val, const char *str, unsigned int len);
-err_t val_string_init_squoted(val_t *val, const char *str, unsigned int len);
-
-err_t val_string_destroy(val_t *string);
-err_t val_string_clone(val_t *val, val_t *orig);
-int val_string_fprintf(val_t *string, FILE *file, const fmt_t *fmt);
-int val_string_sprintf(val_t *string, val_t *buf, const fmt_t *fmt);
-
-void val_string_clear(val_t *string);
-unsigned int val_string_len(val_t *string);
-int val_string_empty(val_t *string);
-int val_string_small(val_t *string);
-
-err_t val_string_deref(val_t *string);
-err_t val_string_lpushc_(val_t *list, char c);
-err_t val_string_rpushc_(val_t *list, char c);
-err_t val_string_lpop(val_t *string, val_t *el);
-err_t val_string_rpop(val_t *string, val_t *el);
-
-err_t val_string_cat(val_t *string, val_t *rhs);
-err_t val_string_lcat(val_t *string, val_t *lhs);
-err_t val_string_cat_(val_t *string, const char *rhs, unsigned int len);
-err_t val_string_lcat_(val_t *string, const char *lhs, unsigned int len);
-err_t val_string_cat_copy(val_t *string, val_t *rhs);
-err_t val_string_lcat_copy(val_t *string, val_t *lhs);
-
-err_t val_string_substring(val_t *string, unsigned int off, int len);
-err_t val_string_rsplitn(val_t *string, val_t *rhs, unsigned int i);
-err_t val_string_lsplitn(val_t *string, val_t *lhs, unsigned int i);
-err_t val_string_unwrap(val_t *string);
-
-err_t val_string_ith(val_t *string, unsigned int i);
-err_t val_string_dith(val_t *string, unsigned int i, val_t *el);
-
-err_t val_string_seti(val_t *string, unsigned int i, char c);
-
-err_t val_string_split(val_t *string);
-err_t val_string_split2_(val_t *string, const char *splitters, unsigned int nsplitters);
-err_t val_string_join(val_t *list);
-err_t val_string_join2_(val_t *list, const char *sep, unsigned int seplen);
-
-void val_string_trim(val_t *string); //trim leading/trailing whitespace
-err_t val_string_padleft(val_t *string,char c, int n); //pad left with n chars of c
-err_t val_string_padright(val_t *string,char c, int n); //pad right with n chars of c
-
-err_t val_string_find_(val_t *string, const char *substr, unsigned int substrn);
-err_t val_string_rfind_(val_t *string, const char *substr, unsigned int substrn);
-err_t val_string_firstof_(val_t *string, const char *accept, unsigned int naccept);
-err_t val_string_lastof_(val_t *string, const char *accept, unsigned int naccept);
-err_t val_string_firstnotof_(val_t *string, const char *reject, unsigned int nreject);
-err_t val_string_lastnotof_(val_t *string, const char *reject, unsigned int nreject);
-
-err_t val_string_lreserve(val_t *string, unsigned int n);
-err_t val_string_rreserve(val_t *string, unsigned int n);
-err_t val_string_lextend(val_t *string, unsigned int n, char **p);
-err_t val_string_rextend(val_t *string, unsigned int n, char **p);
-
-//whether any/all chars are not '\0'
-int val_string_any(val_t *string);
-int val_string_all(val_t *string);
-
-//string comparison functions
-int val_string_compare(val_t *lhs, val_t *rhs);
-int val_string_lt(val_t *lhs, val_t *rhs);
-int val_string_eq(val_t *lhs, val_t *rhs);
-
-int val_string_strcmp(val_t *string, const char *cstr);
-
-uint32_t val_string_hash32(val_t *str);
-uint64_t val_string_hash64(val_t *str);
-
-const char* val_string_str(val_t *string);
-const char* val_string_get(val_t *string, unsigned int i);
-const char* val_string_rget(val_t *string, unsigned int i);
-const char* val_string_cstr(val_t *string); //appends '\0' before returning str
-
-
-
-//ident functions
-void val_ident_init_handlers(struct type_handlers *h);
-void val_ident_to_string(val_t *ident);
-err_t val_ident_init_(val_t *val, const char *ident, unsigned int len);
-int val_ident_fprintf(val_t *ident, FILE *file, const fmt_t *fmt);
-int val_ident_sprintf(val_t *ident, val_t *buf, const fmt_t *fmt);
-err_t val_ident_escape(val_t *ident);
-err_t val_ident_unescape(val_t *ident);
-int val_ident_escaped(val_t *ident);
-unsigned int val_ident_escaped_levels(val_t *ident);
 #endif

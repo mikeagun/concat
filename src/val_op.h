@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -12,23 +12,12 @@
 //See the License for the specific language governing permissions and
 //limitations under the License.
 
-#include "val_include.h"
-#include "val_stack.h"
+#ifndef __VAL_OP_H__
+#define __VAL_OP_H__ 1
+#include "val.h"
+#include "val_printf_fmt.h"
+int val_op_fprintf(int op,FILE *file, const struct printf_fmt *fmt);
+int val_op_sprintf(int op,valstruct_t *buf, const struct printf_fmt *fmt);
 
-int main(int argc, char *argv[]) {
-  val_init_type_handlers();
-  val_t stack;
-  val_stack_init(&stack);
-  val_t t;
-  val_stack_push(&stack,val_int_init(&t,5));
-  int r;
-  const char *hello = "hello world";
-  if ((r = val_string_init_cstr(&t,hello,strlen(hello)))) {
-    printf("error string init\n");
-    return 1;
-  }
-  val_stack_push(&stack,&t);
-  val_stack_push(&stack,val_int_init(&t,6));
-  val_stack_rprint(&stack);
-  return 0;
-}
+
+#endif

@@ -1,4 +1,4 @@
-#Copyright (C) 2020 D. Michael Agun
+#Copyright (C) 2024 D. Michael Agun
 #
 #Licensed under the Apache License, Version 2.0 (the "License");
 #you may not use this file except in compliance with the License.
@@ -27,14 +27,14 @@
       ] trycatch
     ] 1 napply
     [              #| (expected...) [testcode] (results...)
-      dup3 dup2 ne [
-        swap "Test " print_ print_code_ ": FAILED" print
+      dup3 dup2 ne [ #unexpected results
+        swap "Test " printV_ printV_ ": FAILED" print
         pop pop
-      ] [
+      ] [ #got expectge results
         pop pop pop
       ] ifelse
     ] [            #| (expected...) [testcode] exception
-      swap "Test " print_ print_code_ ": ERROR: " print_ print_code
+      swap "Test " printV_ printV_ ": ERROR: " print_ printV
       pop
     ] ifelse #if no exception
   ] scope

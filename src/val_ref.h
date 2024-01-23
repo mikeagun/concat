@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -14,30 +14,29 @@
 
 #ifndef __VAL_REF_H__
 #define __VAL_REF_H__ 1
+
 #include "val.h"
-
-//ref vals are threadsafe refcounted pointers to a single val
-//  - used for inter-thread communication
-//    - operations protected by lock and support wait/signal/broadcast
-//    - unlock handled on cont to ensure as long as
-//      a fatal doesn't occur ref will be unlocked on exit of the guarded code
-//      (by exception or finishing eval)
-//  - at concat level suports the ref/deref/refswap and guard and guard.* ops 
-
-void val_ref_init_handlers(struct type_handlers *h);
 
 err_t val_ref_wrap(val_t *val); //initialize ref by wrapping val in ref
 err_t val_ref_unwrap(val_t *ref); //dereference val (so *ref becomes copy of reffered object)
-err_t val_ref_swap(val_t *ref, val_t *val); //swap value of referred object with val
+err_t val_ref_swap(valstruct_t *ref, val_t *val); //swap value of referred object with val
 
-err_t val_ref_clone(val_t *ret, val_t *orig);
-err_t val_ref_destroy(val_t *val);
+err_t _val_ref_clone(val_t *ret, valstruct_t *orig);
+void _val_ref_destroy(valstruct_t *ref);
 
-int val_ref_fprintf(val_t *val,FILE *file, const fmt_t *fmt);
-int val_ref_sprintf(val_t *val,val_t *buf, const fmt_t *fmt);
+err_t val_ref_signal(valstruct_t *val);
+err_t val_ref_broadcast(valstruct_t *val);
+err_t val_ref_wait(valstruct_t *val);
 
-err_t val_ref_signal(val_t *val);
-err_t val_ref_broadcast(val_t *val);
-err_t val_ref_wait(val_t *val);
+void _val_ref_swap(valstruct_t *ref, val_t *val);
+err_t _val_ref_lock(valstruct_t *ref);
+err_t _val_ref_trylock(valstruct_t *ref);
+err_t _val_ref_unlock(valstruct_t *ref);
+err_t _val_ref_signal(valstruct_t *ref);
+err_t _val_ref_broadcast(valstruct_t *ref);
+err_t _val_ref_wait(valstruct_t *ref);
+
+int val_ref_fprintf(valstruct_t *v,FILE *file, const struct printf_fmt *fmt);
+int val_ref_sprintf(valstruct_t *v,valstruct_t *buf, const struct printf_fmt *fmt);
 
 #endif

@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -12,15 +12,16 @@
 //See the License for the specific language governing permissions and
 //limitations under the License.
 
-#ifndef __VAL_CAST_H__
-#define __VAL_CAST_H__ 1
-#include "val.h"
-
-int val_as_bool(val_t *val);
-
-valint_t val_as_int(val_t *val);
-err_t val_to_int(val_t *ret, val_t *val);
-
-err_t val_to_string(val_t *val);
-
-#endif
+//#ifndef __VAL_CAST_H__
+//#define __VAL_CAST_H__ 1
+//#include "val.h"
+//
+//int val_as_bool(val_t val);
+//
+//int val_as_int(val_t val);
+//int val_to_int(val_t *ret, val_t val);
+//
+////char* val_as_string(val_t *val, unsigned int *len);
+////int val_to_string(val_t *ret, val_t *val);
+//
+//#endif

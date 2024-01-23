@@ -1,4 +1,4 @@
-//Copyright (C) 2020 D. Michael Agun
+//Copyright (C) 2024 D. Michael Agun
 //
 //Licensed under the Apache License, Version 2.0 (the "License");
 //you may not use this file except in compliance with the License.
@@ -12,15 +12,13 @@
 //See the License for the specific language governing permissions and
 //limitations under the License.
 
-#ifndef _VAL_HASH_INTERNAL_H_
-#define _VAL_HASH_INTERNAL_H_ 1
-
+#ifndef __VAL_HASH_INTERNAL_H__
+#define __VAL_HASH_INTERNAL_H__ 1
 #include "val_hash.h"
 
-struct val_hash_struct { 
-  struct hashtable *hash;
-  int refcount;
-  int depth; //how many layers are in this hash object
-};
+void _hashchain_dispose(struct hashentry *e);
+
+struct hashentry* alloc_hashentry(valstruct_t *key, val_t value, uint32_t khash, struct hashentry *next);
+struct hashentry* alloc_hashentry_clone(valstruct_t *key, val_t value, uint32_t khash, struct hashentry *next);
 
 #endif

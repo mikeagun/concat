@@ -1,4 +1,4 @@
-#Copyright (C) 2020 D. Michael Agun
+#Copyright (C) 2024 D. Michael Agun
 #
 #Licensed under the Apache License, Version 2.0 (the "License");
 #you may not use this file except in compliance with the License.
@@ -17,6 +17,9 @@
 #  - pool.eval queues work and returns val which evals to the top-of-stack from work eval (after waiting)
 #  TODO: reduce lock events per q op (e.g. keep q & t outside of ref in outer list, and just pass two refs to thread)
 
+#TODO: what do we call this (right now it is called qprotect in the code, but not exposed as an op)
+# - protects val such that when placed in a quotation its evaluation results in itself (vs its bare evaluation on wstack like protect helps with)
+[ dup iscode not \protect if ] \qprotect def
 
 [ () ref ] \q.create def
 [ \rpush guard.sig ] \q.push def
@@ -37,7 +40,7 @@ q.create [
 [ () ref 0 0 () 4 wrapn ref pool.spawn ] \pool.create def #ref(ref(queue) live free (threads))
 [
   dup [                                   #| ref() (q l f (t))
-    [ wrap \_pool.runner thread] dip #| {thread: ref() <|> _pool.runner} (q l f (t))
+    [ wrap (_pool.runner) thread] dip #| {thread: ref() <|> _pool.runner} (q l f (t))
     \rpush 4 mapnth                   #| (q l f (t... {new thread}))
     \inc 2 mapnth                     #| (q l+1 f (t... {new thread}))
   ] guard                             #| ref((q) l+1 f (t... {new thread}))
@@ -94,7 +97,7 @@ q.create [
 # - TODO: version with trycatch to detect/handle work eval exceptions
 [
   0 ref dup swapd               #| ref(result) work ref(0)
-  \protect dip                  #| ref(result) \work ref(0) 
+  \qprotect dip                  #| ref(result) \work ref(0) 
   [eval_result] lpush lpush     #| ref(result) [\work ref(0) eval_result]
   [[wait_result] lpush] dip     #| [ref(result) wait_result] [\work ref(0) eval_result]
 ] \make_eval_result def #( work -- [ref(result) wait_result] [\work ref(0) eval_result])
@@ -144,6 +147,7 @@ pool.create
 pool.spawn list
 "===queuing work===" print
 ( [1 2 +] [3 4 +] [ 15 fac ] [16 fac] [3 fac] [5 fac] \tfunc )
+#[ swap pool.eval qstate swap ] map
 [ swap pool.eval swap ] map
 list
 "===evaling results===" print
