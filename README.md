@@ -1,35 +1,5 @@
 **concat is a concatenative stack-based (aka RPN-style / postfix) programming language and a matching cross-platform bytecode VM.**
 
-# What's new?
-
-The old (very clean) implementation used switch+function dispatch, and every val was stored as a type+union struct.
-This was great for VM debugging, but quite slow. Profiling with valgrind showed memory, dispatch, function call, and typechecking overheads dominated overall CPU time.
-
-To address the above bottlenecks, I've completely rewritten the VM using token-threading and val boxing.
-For now the implementation is just focused on 64bit CPUs (with 47 or less bits of canonical address space), but the new design is much lighter and faster, so also gets closer to fitting on small MCUs.
-
-The new implementation uses a 3-state token-threaded VM with 64bit boxed vals.
-
-- 3 states based on stack contents, which lets many opcodes have at least one state where they can skip all stack checks
-  - huge reduction in checks for whether or not we have the arguments for an op
-  - For unoptimized code we still need all the typechecks, but with the boxing (see below) these are also faster
-  - see comments `vm.c` for a more complete description of the VM states
-- all vals now boxed into 64bits using inverse pointer unboxing - either the val is directly contained in the 64 bits, or is a tagged pointer to a struct with the rest of the val information
-  - opcodes, 32 bit integers (up to 47 bits supported), and doubles are stored directly in the 64bit field
-    - greatly reduces both storage overhead and allocation/deallocation costs for simple types
-  - extended types (lists, strings, dictionaries, references, ...) store a tagged pointer to a struct in the 64bit field
-    - the tagging lets the VM do basic typechecking (string/list/other) without dereferencing the struct, and also point to several different struct types
-  - relies on the fact that 64bit pointers don't (usually, currently) have 64 bits of usuable address space, and IEEE754 64bit double NaNs have enough spare bits we can play with to store a pointer along with some tag bits - in current x86\_64 a canonical pointer is just 47 bits
-    - the current implementation is somewhat architecture-specific (assuming 47bit canonical pointers), so will need changing for other/future architectures
-    - some CPUs are already up to 52+bits usable address space, so this will need to be revisited at some point (see val.h notes for some other tagging options)
-    - on an 8bit MCU implementation we'll likely use smaller boxes and might either drop floats/doubles or make them extended (tagged pointer) types
-  - see `val.h` for the details on how the bits are packed and some notes on other bit packing / pointer tagging options
-- token-threaded dispatch (with space to implement direct-threading later for compiled/optimized bytecode)
-  - in the VM core we jump directly to the next opcode with a computed goto (based on opcode and VM state) instead of the old switch+function dispatch
-  - the loop iteration, switch statement, and function call of the old impl. made up most of overall CPU time for computation-heavy code, so this shaves a lot of cycles off the minimum cycles-per-instruction
-  - with the 3 VM states, the computed goto skips unecessary stack checks and can jump straight to the type checks or operation
-
-
 # What is it?
 
 This project started a couple years ago as a personal project for an powerful+friendly RPN-style terminal calculator.
@@ -70,7 +40,40 @@ Features currently implemented in the VM/interpreter:
 - **File IO** - file operations and ability to run scripts from files
 - **Comprehensive printf** - with tweaks for stack-languages - very useful for debugging and general output
 
-## concat is a language (and VM) of 4 stacks:
+# What's new?
+
+The old (very clean) implementation used switch+function dispatch, and every val was stored as a type+union struct.
+This was great for VM debugging, but quite slow. Profiling with valgrind showed memory, dispatch, function call, and typechecking overheads dominated overall CPU time.
+
+To address the above bottlenecks, I've completely rewritten the VM using token-threading and val boxing.
+For now the implementation is just focused on 64bit CPUs (with 47 or less bits of canonical address space), but the new design is much lighter and faster, so also gets closer to fitting on small MCUs.
+
+The new implementation uses a 3-state token-threaded VM with 64bit boxed vals.
+
+- 3 states based on stack contents, which lets many opcodes have at least one state where they can skip all stack checks
+  - huge reduction in checks for whether or not we have the arguments for an op
+  - For unoptimized code we still need all the typechecks, but with the boxing (see below) these are also faster
+  - see comments `vm.c` for a more complete description of the VM states
+- all vals now boxed into 64bits using inverse pointer unboxing - either the val is directly contained in the 64 bits, or is a tagged pointer to a struct with the rest of the val information
+  - opcodes, 32 bit integers (up to 47 bits supported), and doubles are stored directly in the 64bit field
+    - greatly reduces both storage overhead and allocation/deallocation costs for simple types
+  - extended types (lists, strings, dictionaries, references, ...) store a tagged pointer to a struct in the 64bit field
+    - the tagging lets the VM do basic typechecking (string/list/other) without dereferencing the struct, and also point to several different struct types
+  - relies on the fact that 64bit pointers don't (usually, currently) have 64 bits of usuable address space, and IEEE754 64bit double NaNs have enough spare bits we can play with to store a pointer along with some tag bits - in current x86\_64 a canonical pointer is just 47 bits
+    - the current implementation is somewhat architecture-specific (assuming 47bit canonical pointers), so will need changing for other/future architectures
+    - some CPUs are already up to 52+bits usable address space, so this will need to be revisited at some point (see val.h notes for some other tagging options)
+    - on an 8bit MCU implementation we'll likely use smaller boxes and might either drop floats/doubles or make them extended (tagged pointer) types
+  - see `val.h` for the details on how the bits are packed and some notes on other bit packing / pointer tagging options
+- token-threaded dispatch (with space to implement direct-threading later for compiled/optimized bytecode)
+  - in the VM core we jump directly to the next opcode with a computed goto (based on opcode and VM state) instead of the old switch+function dispatch
+  - the loop iteration, switch statement, and function call of the old impl. made up most of overall CPU time for computation-heavy code, so this shaves a lot of cycles off the minimum cycles-per-instruction
+  - with the 3 VM states, the computed goto skips unecessary stack checks and can jump straight to the type checks or operation
+
+
+# Language Features:
+below are some of the features of the language (and VM):
+
+### concat is a language (and VM) of 4 stacks:
   - each stack contains vals (everything in concat is a val, including code and the VM itself)
   - **the stack** -- this is where we keep data and/or code
     - ints,strings,quotations being built, threads, VMs being debugged, etc -- everything goes on the stack
@@ -88,9 +91,6 @@ Features currently implemented in the VM/interpreter:
   - **the continuation stack** -- this supports try-catch, debug-on-error, and cleanup handlers to e.g. release locks on shared data
     - this could also be handled via the work stack (e.g. insert flag in work stack at continuation point),
       but has given a nice clean separation between work to be evaluated and exception handling/cleanup code
-
-# Language Features:
-below are some of the features of the language (and VM):
 
 ### no explicit memory management
   - no GC -- all data lives on one of the stacks (and is freed when popped or the last reference is popped)
