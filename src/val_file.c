@@ -38,7 +38,7 @@ valstruct_t _val_file_stdin = {
     .flags = NONE,
     .refcount = 1
 #ifdef DEBUG_FILENAME
-    , .fname = "STDOUT"
+    , .fname = "STDIN"
 #endif
   }
 };
@@ -49,7 +49,7 @@ valstruct_t _val_file_stdout = {
     .flags = NONE,
     .refcount = 1
 #ifdef DEBUG_FILENAME
-    , .fname = "STDIN"
+    , .fname = "STDOUT"
 #endif
   }
 };

@@ -16,6 +16,7 @@
 #include "val_string.h"
 #include "val_list.h"
 #include "val_file.h"
+#include "val_fd.h"
 #include "val_dict.h"
 #include "val_ref.h"
 #include "val_op.h"
@@ -62,6 +63,8 @@ int val_fprintf_(val_t val, FILE *file, const struct printf_fmt *fmt) {
           return val_ref_fprintf(__ref_ptr(val),file,fmt);
         case TYPE_FILE:
           return val_file_fprintf(__file_ptr(val),file,fmt);
+        case TYPE_FD:
+          return val_fd_fprintf(__fd_ptr(val),file,fmt);
         case TYPE_VM:
           return val_vm_fprintf(__vm_ptr(val),file,fmt);
         default:
@@ -111,6 +114,9 @@ int val_sprintf_(val_t val, valstruct_t *buf, const struct printf_fmt *fmt) {
           break;
         case TYPE_FILE:
           r = val_file_sprintf(__file_ptr(val),buf,fmt);
+          break;
+        case TYPE_FD:
+          r = val_fd_sprintf(__fd_ptr(val),buf,fmt);
           break;
         case TYPE_VM:
           r = val_vm_sprintf(__vm_ptr(val),buf,fmt);

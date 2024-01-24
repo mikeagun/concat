@@ -19,6 +19,7 @@
 #include "val_dict.h"
 #include "val_ref.h"
 #include "val_file.h"
+#include "val_fd.h"
 #include "val_vm.h"
 #include "val_printf.h"
 #include "vm_err.h"
@@ -72,6 +73,9 @@ void val_destroy(val_t val) {
           break;
         case TYPE_FILE:
           _val_file_destroy(v);
+          break;
+        case TYPE_FD:
+          _val_fd_destroy(v);
           break;
         case TYPE_VM:
           _val_vm_destroy(v);
@@ -128,6 +132,9 @@ err_t val_clone(val_t *val, val_t orig) {
           break;
         case TYPE_FILE:
           if ((e = _val_file_clone(val,origp))) return e;
+          break;
+        case TYPE_FD:
+          if ((e = _val_fd_clone(val,origp))) return e;
           break;
         case TYPE_VM:
           if ((e = val_vm_clone(val,origp->v.vm))) return e;
@@ -234,6 +241,10 @@ err_t val_validate(val_t val) {
           if (!v->v.file.f) return _throw(ERR_BADTYPE);
           if (v->v.file.refcount < 1) return _throw(ERR_BADTYPE);
           if (v->v.file.refcount > 10000) return _throw(ERR_BADTYPE); //NOTE: this doesn't actually guarantee val is bad, but seems highly unlikely during VM debugging
+        case TYPE_FD:
+          if (v->v.fd.fd < 0) return _throw(ERR_BADTYPE);
+          if (v->v.fd.refcount < 1) return _throw(ERR_BADTYPE);
+          if (v->v.fd.refcount > 10000) return _throw(ERR_BADTYPE); //NOTE: this doesn't actually guarantee val is bad, but seems highly unlikely during VM debugging
           return 0;
         case TYPE_VM:
           return vm_validate(v->v.vm);
@@ -274,7 +285,7 @@ out_e:
 
 int val_ispush(val_t val) {
   if (val_is_int(val) || val_is_double(val)) return 1; //TODO: clean up ispush
-  else return !(val_is_opcode(val) || val_is_code(val) || val_is_ident(val) || val_is_file(val) || val_is_vm(val) || val_is_bytecode(val));
+  else return !(val_is_op(val) || val_is_code(val) || val_is_ident(val) || val_is_file(val) || val_is_vm(val) || val_is_bytecode(val));
 }
 
 //used when you want the evaluation of a val INSIDE A QUOTATION to result in the original val

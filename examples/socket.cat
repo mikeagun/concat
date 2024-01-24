@@ -12,28 +12,22 @@
 #See the License for the specific language governing permissions and
 #limitations under the License.
 
-# simple threadsafe queue implementation
+# socket test - forks and transfers data between procs with inet socket
 
-[
-  \rpush guard.sig
-] \q.push def
+# child process connects to socket, sends 2 strings, and exits
+# parent process listens on socket and accepts 1st connection, prints to end of stream, and exits
 
-[
-  [dup empty] [lpop] guard.waitwhile
-] \q.pop def
+[ "127.0.0.1" 4994 ] \params def
 
-[
-  () ref
-] \q.create def
-
-q.create dup
-wrap
-(1 2 3 4 5 6 7 8 9 10) [
-  [ #map each arg to thread using that arg
-    dup2 lpush [q.push] thread
-  ] map
-  popd
-] sip size
-swap [[q.pop swap print] times pop] dip #print result from each thread
-[eval pop] each #wait for each thread to finish
-vstate
+fork 0 = [
+  socket params socket.connect
+  "Hello" write "World" write
+  "CLIENT"
+  vstate clear
+][
+  socket params socket.listen
+  socket.accept
+  1024 read [dup isint not] [printV 1024 read] while
+  "SERVER"
+  vstate clear
+] ifelse_

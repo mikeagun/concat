@@ -19,6 +19,7 @@
 #include <semaphore.h>
 
 #include "vm_err.h"
+#include "opcodes.h"
 #include "val_printf_fmt.h"
 
 #define DEBUG_FILENAME 1
@@ -41,7 +42,7 @@
 //  - some other options would be tagged pointers (use low bits from alignment) or store other data types in double NaN-space
 //  - current solution requires pointer space to be no more than 47 bits, with the high bits all zero
 //  - this code is very-much platform dependent (but should be general across 64bit machines with 47 bit pointers plus native 64 bit integers and 64bit double floats)
-//FIXME: pool allocators not currently threadsafe
+//FIXME: pool allocators not currently threadsafe -- falling back to malloc/free for now
 //TODO: normalize and codify val function naming (e.g. underscore prefix/suffix)
 
 
@@ -49,6 +50,13 @@
 /////////////////////////////// Inverse Pointer Unboxing ////////////////////////////////////////
 // - not a new idea, so ideas from various sources, but some specific ideas came from: "Inverse Pointer Unboxing" (Fairhurst, 2017)
 // - goal is not just to pack all types into a 64bit val, but to do so with minimum cpu cycles to do boxing, unboxing, typechecking, and type determining
+//
+// - the current 64bit val_t can contain one of:
+//   - double (non-NaN or infinity) - bits are inverted, which has nice property that canonical pointers fit in NaN space and valid doubles are outside canonical pointer space
+//   - pointer - if we currently store opcodes in normal pointer space
+//   - tagged pointer - pointer to struct for extended val
+//     - one of: list-type, string-type, other
+//   - integer - 32 bits used, but up to 47 bits available
 //
 //IEEE754 64bit NaN
 // - bit fields:
@@ -59,30 +67,29 @@
 //   - mantissa can be anything except all zero (exponent all 1 with mantissa all zero is infinity NaN)
 //
 //64bit pointer
-// - I am assuming x86_64 architecture, or another architecture with simliar current limits
-//   - Some CPUs are already up to 52+ bits usable address space, so it will get harder and harder to stick within inverse double NaN space + canonical pointer space at the same time
-//   - hopefully by the time we can't CPUs will have enough register/cache space where we can up the size to e.g. 9/10/16 bytes and not worry about (or actually use) the "wasted" space
+// - I am assuming x86_64 architecture, or another architecture with <52 bits of usable address space
+//   - Some CPUs are already up to 52+ bits usable address space, so it will get harder to stick within inverse double NaN space + canonical pointer space at the same time
+//   - using low bits of address (bits that are zero per alignment) is another option, but that requires more bit twiddling than this approach
 //     - or we can add a couple of bit shuffles to unpack doubles at that point, or we can make doubles all valstruct types, and then even once canonical pointer space is a full 64 bits we could use the low alignment bits instead (and assuming/enforcing that valstructs are aligned)
 // - 47bits, with high bits either all one or all zero (that actually makes it 48 bits, but high half typically reserved for kernel so we can assume 47 bits for now)
 //   - depending on system? - high bits ignored (47 bits or less), high bits must be zero (47 bits or less), or high bits must all be the same (48 bits)
 //   - high half of address range typically reserved for kernel in 48bit solutions we can still assume 47bit in userspace
 //   - this assumption will become obsolete over time (we already have machines with 48+ bits of RAM), but for now "it works on my machine" (and if it is good enough for that abomination called javascript, ...)
 //   - TODO: keep updating our val packing scheme as needed for modern hardware
-//     - we will eventually need two or more bit packing schemes -- one for mcus (10-16bit addr), the other for 64bit machines (we aren't optimizing for 32bit machines at all currently)
+//     - we will eventually need two or more bit packing schemes -- one for mcus (10-16bit addr), the other for 64bit machines (and 32 bit only if there is a usecase for it)
 //     - this is all just VM implementation detail, which only impacts the language in terms of standard float/int precision and range, and doesn't directly impact bytecode (except which types we should compile to)
 //
 //In the inverse punboxing scheme doubles, integers, and other tagged types are stored in non-canonical pointer space, with pointers stored in canonical pointer space
-// - in our scheme, we actually store opcodes in canonical pointer space currently
-//   - that could change in the future (e.g. opcodes in pointer range below minimum valid memory address, then native function pointers in same pointer space)
-// - if value <=2^47-1, then it is a canonical pointer (i.e. opcode, or possibly native later)
-// - if value >2^51-1, then it is a bitwise-flipped double
+// - in our scheme, opcodes are stored in the low addresses of canonical pointer space currently (and implementation specific native ops in the rest of the address space)
+// - if value <=2^47-1, then it is a canonical pointer (i.e. opcode if <N_OPS, else native)
+// - if value >2^51-1, then it is a bit-inverted double
 //   - by inverting the bits of the ieee754 64bit float, the range of non-NaN doubles is mutually exclusive from the canonical pointer range
 // - else we test tag bits in bit 48-53 to determine type
 //   - we currently use these as a type bitmap, but to pack more type info we could use bits 48,49,50 as a 3 bit numeric type id
 
 
 ///////////////////////////// concat packed val_t /////////////////////////////////////////
-// - we use above unboxing rules to get bare pointers (which we use as ops, later natives) and doubles
+// - we use above unboxing rules to get bare pointers (which we use as ops / natives) and doubles
 // - for other tagged vals, we currently break them into:
 //   - 32bit integer
 //   - str-type valstruct val (i.e. string,ident,bytecode)
@@ -101,6 +108,7 @@ enum val_type {
   TYPE_DICT,
   TYPE_REF,
   TYPE_FILE,
+  TYPE_FD,
   TYPE_VM,
   //TYPE_NATIVE,
   //TYPE_DOUBLE,
@@ -147,14 +155,24 @@ typedef struct _ref_t {
 } ref_t;
 
 typedef struct _file_t {
-  //int fd;
   FILE *f;
   enum { NONE=0,DOCLOSE=1} flags;
   int refcount;
 #ifdef DEBUG_FILENAME
   char *fname; //name of the file (just for printing to user, not needed in real impl)
+  //TODO: support DEBUG_LINENO
 #endif
 } file_t;
+
+typedef struct _fd_t {
+  int fd;
+  enum { FD_NONE=0,FD_DOCLOSE=1} flags;
+  int refcount;
+#ifdef DEBUG_FILENAME
+  char *fname; //name of the file (just for printing to user, not needed in release)
+  //TODO: support DEBUG_LINENO
+#endif
+} fd_t;
 
 struct hashtable;
 struct _valstruct_t;
@@ -171,10 +189,12 @@ typedef struct _valstruct_t {
     dict_t dict;
     ref_t ref;
     file_t file;
+    fd_t fd;
     vm_t *vm;
   } v;
 } valstruct_t;
 
+//opcodes and natives use _OP_TAG - opcode if <N_OPS, native op else
 #define _OP_TAG    (0x0000)
 //integer type (normally 32bits, but actually a 47 bit field)
 #define _INT_TAG    (0x0001)
@@ -183,14 +203,15 @@ typedef struct _valstruct_t {
 //generic value type (look at valstruct to get 
 #define _VAL_TAG    (0x0008)
 //TODO: figure out what to do with these? (reference val, bare native, errnum, short ident, bitmap, and s9 come to mind) -- or remap types altogether
-//TODO: go through ieee754 spec and determine proper tag rules/limits
 #define _TAG5       (0x00F0)
 
 #define __val_tag(v) ((v)>>47)
 
-//canonical pointer (we treat as opcode)
+//canonical pointer (core opcode if < N_OPS, implementation specific native otherwise)
 #define val_is_null(v) (VAL_NULL==(v))
-#define val_is_opcode(v) ((v)<=(1UL<<47)-1)
+#define val_is_op(v) ((v)<=(1UL<<47)-1)
+#define val_is_opcode(v) ((v)<N_OPCODES)
+#define val_is_native(v) ((v)>=N_OPCODES && (v)<=(1UL<<47)-1)
 #define __val_op(v) (*(int*)(&v))
 #define __op_val(op) ((val_t)(op))
 
@@ -234,6 +255,7 @@ val_t __dbl_val(const double f);
 #define __dict_ptr(v) __val_ptr(v)
 #define __ref_ptr(v) __val_ptr(v)
 #define __file_ptr(v) __val_ptr(v)
+#define __fd_ptr(v) __val_ptr(v)
 #define __vm_ptr(v) __val_ptr(v)
 
 #define __string_val(p) __str_val(p)
@@ -244,6 +266,7 @@ val_t __dbl_val(const double f);
 #define __dict_val(p) __val_val(p)
 #define __ref_val(p) __val_val(p)
 #define __file_val(p) __val_val(p)
+#define __fd_val(p) __val_val(p)
 #define __vm_val(p) __val_val(p)
 #endif
 
@@ -253,6 +276,7 @@ val_t __dbl_val(const double f);
 #define val_is_list(val) (val_is_lst(val) && __lst_ptr(val)->type == TYPE_LIST)
 #define val_is_code(val) (val_is_lst(val) && __lst_ptr(val)->type == TYPE_CODE)
 #define val_is_file(val) (val_is_val(val) && __val_ptr(val)->type == TYPE_FILE)
+#define val_is_fd(val) (val_is_val(val) && __val_ptr(val)->type == TYPE_FD)
 #define val_is_dict(val) (val_is_val(val) && __val_ptr(val)->type == TYPE_DICT)
 #define val_is_ref(val) (val_is_val(val) && __val_ptr(val)->type == TYPE_REF)
 #define val_is_vm(val) (val_is_val(val) && __val_ptr(val)->type == TYPE_VM)

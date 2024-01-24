@@ -1,4 +1,4 @@
-**concat is a concatenative stack-based (aka RPN-style / postfix) programming language and a matching cross-platform bytecode VM.**
+**concat is a concatenative stack-based (aka RPN-style / postfix) programming language and a matching token-threaded bytecode VM.**
 
 # What is it?
 
@@ -9,6 +9,20 @@ Beyond making a great calculator (and being useable for general scripting), one 
 Toward that end it has some features making it more suitable for implementation on small MCUs compared to heavier languages (see below).
 
 I've moved the code to GitHub to continue the development and make the language and a reference VM publicly available.
+
+Features currently implemented in the VM/interpreter:
+- **3-state token-threaded VM** - replaces older switch+function dispatch VM for improved performance
+- **Inverse pointer unboxing** - packs all vals into fixed-width 64bit field (either inline value or tagged pointer) for improved memory performance/overhead
+- Operations over **integer, float, string, list, and dictionary** data types
+- **Control Flow** - both a sufficient set of combinators to implement anything else, and the most common control flow ops
+- **Threading** - extremely easy to create/manage threads
+- **Thread Synchronization** - thread-safe reference objects which handle locking and support wait/signal/broadcast
+- **Exceptions** - try/catch, throw, and ability to break out into concat debugger on error
+- **Debugging** - sufficient set of low-level ops to build powerful debugging tools
+- **VM Debugging** - macro-based tools to help with debugging the VM (e.g. trap out to gdb on error, validate state at every step)
+- **File IO** - file operations and ability to run scripts from files
+- **Network IO** - currently just basic TCP socket support
+- **Comprehensive printf** - with tweaks for stack-languages - very useful for debugging and general output
 
 It is designed to be:
   - **lightweight** -- i.e. run on resource-constrained microcontrollers like 8bit AVR (e.g. Arduino)
@@ -29,16 +43,37 @@ It is designed to be:
     - running on tiny MCU with limited resources, we really can't afford any leaks and would like not to need additional safety nets for VM
     - this has slid with the complete rewrite -- returning to this is one of the next tasks for concat
 
-Features currently implemented in the VM/interpreter:
-- Operations over **integer, float, string, list, and dictionary** data types
-- **Control Flow** - both a sufficient set of combinators to implement anything else, and the most common control flow ops
-- **Threading** - extremely easy to create/manage threads
-- **Thread Synchronization** - thread-safe reference objects which handle locking and support wait/signal/broadcast
-- **Exceptions** - try/catch, throw, and ability to break out into concat debugger on error
-- **Debugging** - sufficient set of low-level ops to build powerful debugging tools
-- **VM Debugging** - macro-based tools to help with debugging the VM (e.g. trap out to gdb on error, validate state at every step)
-- **File IO** - file operations and ability to run scripts from files
-- **Comprehensive printf** - with tweaks for stack-languages - very useful for debugging and general output
+# Example Programs
+
+Below are some selected examples from `examples/` directory. Look there to find these and for more examples.
+
+**Applications:**
+- `board_cuts.cat` - 2D bin packing solution - calculates board cuts needed to get specified list of boards from starting boards
+
+**Threading/Communication:**
+- `queue.cat` - threadsafe queue implementation
+- `workerpool.cat` - implementation of worker thread pool with promises+futures
+- `socket.cat` - simple networking test (forks process and opens socket between parent/child)
+
+**Code Rewriting:**
+- `locals.cat` - handling local variables via code rewriting (factors local variable references out of a quotation)
+  - two options given to use local dictionary scopes or to replace variable references with stack shuffling
+- `analyze.cat` - static code analysis tools (arity checker and abstract interpreter)
+  - the abstract interpreter can (abstractly) evaluate code to determine stack effects and constraints on values
+- `infix.cat` - infix parser - converts quotation from infix to postfix format using shunting yard algorithm
+  - can run first infix then locals to convert infix math expression with variable names into pure concatenative code
+- `optimize.cat` - library of optimization/inlining functions (code rewriting to expand function calls)
+
+**Combinators/Control Flow:**
+- `list.cat` - list-processing operators built up from basic primitives
+- `recursion.cat` - general recursion combinators built from basic primitivs
+- `object.cat` - library for creating named data structures with constructors/accessors/mutators
+
+**Text/Data Formatting/Handling**
+- `ascii_tables.cat` - uses printf to determine column widths and print formatted ascii tables
+- `printf-simple.cat` - simple (and very short) implementation of a basic printf function
+- `time.cat` - time formatting/parsing/printing library
+- `sort.cat` - quicksort and mergesort implementations (includes qsort with custom comparator)
 
 # What's new?
 
@@ -47,6 +82,8 @@ This was great for VM debugging, but quite slow. Profiling with valgrind showed 
 
 To address the above bottlenecks, I've completely rewritten the VM using token-threading and val boxing.
 For now the implementation is just focused on 64bit CPUs (with 47 or less bits of canonical address space), but the new design is much lighter and faster, so also gets closer to fitting on small MCUs.
+
+Process forking and basic networking support has now also been added.
 
 The new implementation uses a 3-state token-threaded VM with 64bit boxed vals.
 
@@ -271,8 +308,9 @@ One of the goals for this project is a cross-platform bytecode supporting resour
 - threading and thread synchronization primitives
   - these work correctly (see various thread examples) with the exception that there are some shared global buffers for IO in the existing implementation
   - we still need a threadsafe memory pool allocator (so we can use the new memory pool code and cut down on malloc/free)
+- Networking - currently just basic TCP socket support, but with a few more ops we should have the primitives to do anything
 - example programs
-    - quite a few already in examples/ directory
+    - quite a few already in examples/ directory, many of them well-documented
 - simple debugging tools exist
     - existing tools are just a set of words added to the dictionary to manipulate/run/debug/inspect concat VMs
     - set up to easily support writing new debugging tools in concat, and/or script debugging sessions

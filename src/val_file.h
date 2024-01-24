@@ -19,7 +19,7 @@
 //#include "vm.h"
 
 //TODO: come up with buffer/block manager for files
-//TODO: supprt threadsafe file io
+//TODO: support threadsafe file io
 #define FILE_BUFLEN 500
 char FILE_BUF[FILE_BUFLEN];
 

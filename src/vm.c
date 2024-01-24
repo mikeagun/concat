@@ -24,6 +24,7 @@
 #include "val_num.h"
 #include "val_math.h"
 #include "val_file.h"
+#include "val_fd.h"
 #include "val_dict.h"
 #include "val_ref.h"
 #include "val_printf.h"
@@ -31,11 +32,18 @@
 #include "val_vm.h"
 #include "helpers.h"
 
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
 #include <string.h>
 #include <valgrind/helgrind.h>
 #include <math.h>
 #include <stdlib.h>
 #include <errno.h>
+
+//needed for platform natives:
+#include <unistd.h>
 
 //valgrind helgrind macros that should be inserted everywhere appropriate
 //ANNOTATE_HAPPENS_BEFORE_FORGET_ALL
@@ -338,7 +346,7 @@ err_t vm_val_resolve(vm_t *vm, val_t *val) {
       if (!def) return 0; //couldn't resolve, just give up
       if (val_is_code(def) && _val_lst_len(__code_ptr(def))==1) def=*_val_lst_begin(__code_ptr(def)); //quotation with single entry -- dequote
     }
-    if (!(val_ispush(def) || val_is_opcode(def))) return 0;
+    if (!(val_ispush(def) || val_is_op(def))) return 0;
 
     e = val_clone(&t,def);
     while(!e && levels--) {
@@ -364,7 +372,7 @@ err_t vm_val_resolve(vm_t *vm, val_t *val) {
       if (!def) return 0; //couldn't resolve, just give up
       if (val_is_code(def) && _val_lst_len(__code_ptr(def))==1) def=*_val_lst_begin(__code_ptr(def)); //quotation with single entry -- dequote
     }
-    if (!(val_ispush(def) || val_is_opcode(def))) return 0;
+    if (!(val_ispush(def) || val_is_op(def))) return 0;
 
     val_t t;
     err_t e;
@@ -739,6 +747,15 @@ err_t _vm_init_dict(vm_t *vm) {
   if (0>(e = vm_dict_put_op(vm,OP_open_list))) goto out_err;
   if (0>(e = vm_dict_put_op(vm,OP_close_list))) goto out_err;
   if (0>(e = vm_dict_put_op(vm,OP_quit)))goto out_err;
+
+  //
+  //implementation-specific natives (opcodes after OP_quit)
+  //
+  if (0>(e = vm_dict_put_op(vm,OP_fork)))goto out_err;
+  if (0>(e = vm_dict_put_op(vm,OP_socket)))goto out_err;
+  if (0>(e = vm_dict_put_op(vm,OP_socket_listen)))goto out_err;
+  if (0>(e = vm_dict_put_op(vm,OP_socket_accept)))goto out_err;
+  if (0>(e = vm_dict_put_op(vm,OP_socket_connect)))goto out_err;
 
   //
   //named constants
@@ -1298,6 +1315,7 @@ err_t vm_dowork(vm_t *vm) {
   int i,n;
   double f;
   vm_t *d;
+  pid_t pid;
 
 
   //val_t *codep,*codeend; //pointers for iterating through code val
@@ -1359,6 +1377,7 @@ err_t vm_dowork(vm_t *vm) {
 #define POP_1 do{ val_destroy(top); state=0; }while(0)
 #define POP_2 do{ val_destroy(top); top=*(--stack); val_clear(stack); state=1; }while(0)
 #define POP2_2 do{ val_destroy(top); val_destroy(*(--stack)); val_clear(stack); state=0; }while(0)
+#define POP2_3 do{ val_destroy(top); val_destroy(*(--stack)); val_clear(stack); top=*(--stack); val_clear(stack); state=1; }while(0)
 #define POP_12 do{ val_destroy(top); if (--state) { top=*(--stack); val_clear(stack); } }while(0)
 #define POPD_2 do{ val_destroy(*(--stack)); val_clear(stack); state=1; }while(0)
 //#define POP do{ if (state) { POP_12; } else { POP_0; } } while(0)
@@ -1385,6 +1404,7 @@ err_t vm_dowork(vm_t *vm) {
 //#define ASSERT_HAVE1_0 do{ if (stack==stackbase) E_EMPTY; } while(0)
 #define STATE_0TO1 do{ if (stack==stackbase) E_EMPTY; top=*(--stack); val_clear(stack); state=1; } while(0)
 #define STATE_1TO2 do{ if (stack==stackbase) E_EMPTY; state=2; } while(0)
+#define STATE_2TO1 do{ if (stack==stackend) RESERVE; state=1; } while(0)
 
 
   //TODO: best way to compute the goto address for the state (array/multiply)
@@ -1393,6 +1413,8 @@ err_t vm_dowork(vm_t *vm) {
   //   - multiply state by num ops per state
 #define GOTO_OP(x) goto *stateops[state][__val_op(x)]
 //#define GOTO_OP(x) goto *_ops[state*N_OPS+__val_op(x)]
+
+
 
 //#define VM_DEBUG_STEP 1
 //VM_DEBUG_STEP enables printing of every step of the VM
@@ -1465,7 +1487,7 @@ loop_next:
               t = vm_dict_get(vm,v);
               if (!val_is_null(t)) { //found def
                 val_destroy(w);
-                if (val_is_opcode(t)) { //if op then we immediately jump to it
+                if (val_is_op(t)) { //if op then we immediately jump to it
                   val_clear(work);
                   GOTO_OP(t);
                 } else { //else we replace ident with definition on work stack
@@ -1523,7 +1545,7 @@ code_return: //we keep looping here until w is empty or the work stack gets upda
                       t = vm_dict_get(vm,tv);
                       if (!val_is_null(t)) {
                         _val_str_destroy(tv);
-                        if (val_is_opcode(t)) { //if op then we immediately jump to it
+                        if (val_is_op(t)) { //if op then we immediately jump to it
                           GOTO_OP(t);
                         } else { //else we push definition onto work stack TODO: if push type, directly push to stack instead
                           VM_TRY(val_clone(&t,t));
@@ -1555,6 +1577,7 @@ code_return: //we keep looping here until w is empty or the work stack gets upda
                   //TODO: decide on file behaviour, I switched it to this so we can have a simpler [protect] for files
                   // - original impl was that files always eval their contents (even inside quotation)
                   // - new impl is that files are pushed when encountered inside quotation, bare files eval their contents
+                  //TODO: TYPE_FD -- same considerations as TYPE_FILE
                   //case TYPE_FILE:
                   //  //FIXME: totally not threadsafe (TODO: use per-thread FILE_BUF)
                   //  //TODO: should we wpush file, or just lpush back onto code list
@@ -1585,6 +1608,7 @@ code_return: //we keep looping here until w is empty or the work stack gets upda
                     break;
                   //case TYPE_DICT:
                   //case TYPE_FILE: -- see commented out case above
+                  //case TYPE_FD: -- see commented out case above
                   default:
                     PUSH(t);
                 }
@@ -1634,6 +1658,7 @@ code_return: //we keep looping here until w is empty or the work stack gets upda
             break;
           //case TYPE_DICT:
           //case TYPE_REF:
+          //case TYPE_FD:
           default:
             val_clear(work); //clear *work since we moved it to stack
             PUSH(w);
@@ -2847,7 +2872,7 @@ op_isident_2:
 op_isnative_0: STATE_0TO1;
 op_isnative_1: 
 op_isnative_2: 
-  t = __int_val(val_is_opcode(_TOP_12));
+  t = __int_val(val_is_op(_TOP_12));
   val_destroy(_TOP_12);
   _TOP_12 = t;
   NEXT;
@@ -3479,20 +3504,37 @@ op_stdin_readline_2:
 op_read_0: STATE_0TO1;
 op_read_1: STATE_1TO2;
 op_read_2:
-  if (!val_is_file(_SECOND_2) || !val_is_int(_TOP_2)) E_BADARGS;
-  t = val_empty_string();
-  if (0>(n = _val_file_read(__file_ptr(_SECOND_2),__str_ptr(t),__val_int(_TOP_2)))) {
-    val_destroy(t);
-    t = __int_val(n);
+  if (!val_is_int(_TOP_2)) E_BADARGS;
+  if (val_is_file(_SECOND_2)) {
+    t = val_empty_string();
+    if (0>(n = _val_file_read(__file_ptr(_SECOND_2),__str_ptr(t),__val_int(_TOP_2)))) {
+      val_destroy(t);
+      t = __int_val(n);
+    }
+  } else if (val_is_fd(_SECOND_2)) {
+    t = val_empty_string();
+    if (0>(n = _val_fd_read(__fd_ptr(_SECOND_2),__str_ptr(t),__val_int(_TOP_2)))) {
+      val_destroy(t);
+      t = __int_val(n);
+    }
+  } else {
+    E_BADARGS;
   }
+
   _TOP_2 = t; //can skip destroy since just an inline int
   NEXT;
 
 op_write_0: STATE_0TO1;
 op_write_1: STATE_1TO2;
 op_write_2:
-  if (!val_is_file(_SECOND_2) || !val_is_string(_TOP_2)) E_BADARGS;
-  if (0>(n = _val_file_write(__file_ptr(_SECOND_2),__str_ptr(_TOP_2)))) HANDLE_e;
+  if (!val_is_string(_TOP_2)) E_BADARGS;
+  if (val_is_file(_SECOND_2)) {
+    if (0>(n = _val_file_write(__file_ptr(_SECOND_2),__str_ptr(_TOP_2)))) HANDLE_e;
+  } else if (val_is_fd(_SECOND_2)) {
+    if (0>(n = _val_fd_write(__fd_ptr(_SECOND_2),__str_ptr(_TOP_2)))) HANDLE_e;
+  } else {
+    E_BADARGS;
+  }
   POP_2;
   NEXT;
 
@@ -4020,6 +4062,63 @@ op_quit_1:
 op_quit_2:
   FIXSTACKS;
   exit(0); //TODO: or return???
+
+//
+//platform natives below here
+//
+
+op_fork_0:
+op_fork_1:
+op_fork_2:
+  pid = fork();
+  PUSH(__int_val(pid));
+  NEXT;
+
+op_socket_0:
+op_socket_1:
+op_socket_2:
+  VM_TRY(val_fd_init_socket(&t,AF_INET,SOCK_STREAM,0));
+  PUSH(t);
+  NEXT;
+
+op_socket_listen_0: STATE_0TO1;
+op_socket_listen_1:
+op_socket_listen_2:
+  if (!HAVE(2)) E_MISSINGARGS;
+  if (!val_is_fd(_THIRD_2)) E_BADTYPE;
+  if (!val_is_str(_SECOND_2)) E_BADTYPE;
+  if (!val_is_int(_TOP_2)) E_BADTYPE;
+
+  VM_TRY(_val_str_make_cstr(__str_ptr(_SECOND_2)));
+
+  //TODO: decide on backlog value/parameter
+  VM_TRY(_val_fd_listen(__val_ptr(_THIRD_2), _val_str_begin(__str_ptr(_SECOND_2)), __val_int(_TOP_2), 10));
+  //POP2_3;
+  POP2_2;
+  NEXT;
+
+op_socket_accept_0: STATE_0TO1;
+op_socket_accept_2: if (state > 1 && stack == stackend) { RESERVE; } STATE_1;
+op_socket_accept_1:
+  if (!val_is_fd(_TOP_1)) E_BADTYPE;
+  VM_TRY(_val_fd_accept(__val_ptr(_TOP_1), &t, (struct sockaddr*)NULL, NULL));
+  PUSH_1(t);
+  NEXT;
+
+op_socket_connect_0: STATE_0TO1;
+op_socket_connect_1:
+op_socket_connect_2:
+  if (!HAVE(2)) E_MISSINGARGS;
+  if (!val_is_fd(_THIRD_2)) E_BADTYPE;
+  if (!val_is_str(_SECOND_2)) E_BADTYPE;
+  if (!val_is_int(_TOP_2)) E_BADTYPE;
+
+  VM_TRY(_val_str_make_cstr(__str_ptr(_SECOND_2)));
+  VM_TRY(_val_fd_connect(__val_ptr(_THIRD_2), _val_str_begin(__str_ptr(_SECOND_2)), __val_int(_TOP_2)));
+  //POP2_3;
+  POP2_2;
+  NEXT;
+
 handle_err_t:
   val_destroy(t);
   HANDLE_e;

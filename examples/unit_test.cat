@@ -39,3 +39,6 @@
     ] ifelse #if no exception
   ] scope
 ] \unit_test def
+
+#[5 4] [1 2 2 + + 2 2 *] unit_test
+(5 4) [5 4] unit_test

@@ -12,9 +12,13 @@
 //See the License for the specific language governing permissions and
 //limitations under the License.
 
+#ifndef __OPCODES_H__
+#define __OPCODES_H__ 1
+
 //OPCODES - list of concat VM opcodes
 // - takes macro function with three arguments (C code opcode, concat opcode string, stack effects string)
 // TODO: normalize stack effects syntax, then add concat interface to get the stack effects (and also c code stack effects api to help with compiling)
+// TODO: fix quit opcode so stripped down VMs can use subset of core opcode range (plus interconstructions)
 #define OPCODES(opcode) \
   opcode(NULL,"NULL","--"), \
   opcode(end,"end","--"), \
@@ -213,7 +217,12 @@
   opcode(open_list,"(","--"), \
   opcode(close_list,")","--"), \
   opcode(catch_interactive,"catch_interactive","--"), \
-  opcode(quit,"quit","--")
+  opcode(quit,"quit","--"), \
+  opcode(fork,"fork","-- A"), \
+  opcode(socket,"socket","-- A"), \
+  opcode(socket_listen,"socket.listen","A B C -- A"), \
+  opcode(socket_accept,"socket.accept","A -- A B"), \
+  opcode(socket_connect,"socket.connect","A B C -- A")
 
 #define TYPECODES(typecode) \
   typecode(int8,"int8",""), \
@@ -283,9 +292,9 @@
 //   - possible load/store interface -- this is very non-concat, but also is very much how nearly all real CPUs work, so adding this at the bottom may simplify some of the higher-level opcodes
 //     - the current set is fairly "pure" (less some internal ops for err handling, debugging, and refs), which doesn't need to be the case for the vm-level opcodes
 
-//normal opcodes
+//opcodes (quit is the last core opcode, above that are system-specific natives)
 #define OP_ENUM(op,opstr,effects) OP_##op
-typedef enum { OPCODES(OP_ENUM), N_OPS } opcode_t;
+typedef enum { OPCODES(OP_ENUM), N_OPS, N_OPCODES = OP_quit } opcode_t;
 #undef OP_ENUM
 
 //bytecode opcodes (normal vm opcodes, typecodes, extra unsafe bytecode ops for use in compiled code)
@@ -296,3 +305,4 @@ typedef enum { OPCODES(OPCODE_ENUM), TYPECODES(TYPECODE_ENUM), N_BYTECODES } byt
 #undef OPCODE_ENUM
 
 extern const char *opstrings[];
+#endif
