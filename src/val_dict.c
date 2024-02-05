@@ -27,7 +27,8 @@
 //TODO: evaluate dict code structure
 //  - we currently preserve valstruct_t pointers to fit with other type implementations
 //  - the means a lot more data movement required on push/pop
-//  - faster implementation might be swappign valstruct ptr on push/pop -- but then need more unique cases in other code
+//  - faster implementation might be swapping valstruct ptr on push/pop -- but then need more unique cases in other code
+
 void _val_dict_destroy_(valstruct_t *dict) {
   //VM_DEBUG_VAL_DESTROY(dict);
   if (dict->v.dict.next) {
@@ -57,6 +58,15 @@ void _val_dict_clone_(valstruct_t *ret, valstruct_t *orig) { //FIXME: bug here -
   *ret = *orig;
   refcount_inc(orig->v.dict.h->refcount);
   if (orig->v.dict.next) refcount_inc(orig->v.dict.next->v.dict.h->refcount);
+}
+
+err_t _val_dict_deref(valstruct_t *dict) {
+  struct hashtable *h;
+  err_t e;
+  if ((e = hash_clone(&h,dict->v.dict.h))) return e;
+  release_hashtable(dict->v.dict.h);
+  dict->v.dict.h = h;
+  return 0;
 }
 
 err_t _val_dict_newscope(valstruct_t *dict) {
@@ -114,14 +124,6 @@ val_t _val_dict_get(valstruct_t *dict, valstruct_t *key) {
   return VAL_NULL;
 }
 
-err_t _val_dict_deref(valstruct_t *dict) {
-  struct hashtable *h;
-  err_t e;
-  if ((e = hash_clone(&h,dict->v.dict.h))) return e;
-  release_hashtable(dict->v.dict.h);
-  dict->v.dict.h = h;
-  return 0;
-}
 int _val_dict_put(valstruct_t *dict, valstruct_t *key, val_t val) {
   if (dict->v.dict.h->refcount>1) {
     err_t e;

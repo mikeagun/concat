@@ -12,33 +12,35 @@ I've moved the code to GitHub to continue the development and make the language 
 
 Features currently implemented in the VM/interpreter:
 - **3-state token-threaded VM** - replaces older switch+function dispatch VM for improved performance
-- **Inverse pointer unboxing** - packs all vals into fixed-width 64bit field (either inline value or tagged pointer) for improved memory performance/overhead
-- Operations over **integer, float, string, list, and dictionary** data types
+- **Inverse pointer unboxing** - packs all vals into fixed-width 64bit field (either inline value or tagged pointer) for improved memory performance/overhead and reduced typechecking costs
+- Operations over **integer, float, string, list, vm, dictionary, file, fd** data types
 - **Control Flow** - both a sufficient set of combinators to implement anything else, and the most common control flow ops
-- **Threading** - extremely easy to create/manage threads
+- **Networking** - simple networking interface (currently based on linux sockets)
+- **Threading** - extremely easy thread management
 - **Thread Synchronization** - thread-safe reference objects which handle locking and support wait/signal/broadcast
 - **Exceptions** - try/catch, throw, and ability to break out into concat debugger on error
-- **Debugging** - sufficient set of low-level ops to build powerful debugging tools
+- **Debugging** - low-level support for powerful debugging tools
 - **VM Debugging** - macro-based tools to help with debugging the VM (e.g. trap out to gdb on error, validate state at every step)
 - **File IO** - file operations and ability to run scripts from files
-- **Network IO** - currently just basic TCP socket support
 - **Comprehensive printf** - with tweaks for stack-languages - very useful for debugging and general output
 
 It is designed to be:
+  - **general purpose** -- threading, shared objects, lock/wait/signal/broadcast, integer/float math, file/network IO, debugging
   - **lightweight** -- i.e. run on resource-constrained microcontrollers like 8bit AVR (e.g. Arduino)
     - simple language, stack-based VM, no GC (stack determines lifetime of val), minimal dependencies
   - **fast** -- token-threaded bytecode VM in C
-  - **debuggable** -- exceptions with try/catch, debugging tools built in with the language+VM features to support new ones
+  - **debuggable** -- exceptions with try/catch, debug vals, debugging tools built in with the language+VM features to support new ones
     - easy to inspect VM state at any point in the concat or C code, with macros to throw SIGINT and trap out to gdb for debugging the C code
+    - debug val support - every val has extra hidden debug val attached, can have vm run debug val in place of regular val
   - **cross platform** -- same language and bytecode from simple calculator application to running compiled bytecode on microcontrollers
     - simple concatenative programming language (eases embedded interpreters -- basically tokenizer + number, string, and list parsing)
     - 8 bit opcode with variable sized bytecode supporting compact programs
     - standard platform independent opcodes (scheduled for 1.0) to support transferring data/code between machines and platforms (e.g. push decision making to IoT edge)
       - can also transfer quotations/identifiers as strings anywhere we have an interpreter/compiler or need to resolve platform-specific natives
     - range of "native" (platform/build dependent) typecodes/opcodes for efficient implementation and code performance
-  - **general purpose** -- multi-threading, shared (refcounted) objects, lock/wait/signal/broadcast, integer and floating point math, file IO
   - **extensible** -- documented C code interface to the VM state with consistent rules for new code to follow
     - macro helpers to define new types,ops,errors, and ease implementation -- plus friendly errors if you forget to define a mandatory op/type handler
+    - this is currently not up-to-date with the new vm implementation. I'm working on getting back to this point over the next couple versions
   - **fully error checked** -- can catch and continue after all non-fatal exceptions
     - running on tiny MCU with limited resources, we really can't afford any leaks and would like not to need additional safety nets for VM
     - this has slid with the complete rewrite -- returning to this is one of the next tasks for concat
@@ -58,8 +60,9 @@ Below are some selected examples from `examples/` directory. Look there to find 
 **Code Rewriting:**
 - `locals.cat` - handling local variables via code rewriting (factors local variable references out of a quotation)
   - two options given to use local dictionary scopes or to replace variable references with stack shuffling
-- `analyze.cat` - static code analysis tools (arity checker and abstract interpreter)
+- `analyze.cat` - static code analysis tools (arity checker and WIP abstract interpreter)
   - the abstract interpreter can (abstractly) evaluate code to determine stack effects and constraints on values
+  - this is from before the new debug val support, so need a new example using debug vals (though this still has value for release builds)
 - `infix.cat` - infix parser - converts quotation from infix to postfix format using shunting yard algorithm
   - can run first infix then locals to convert infix math expression with variable names into pure concatenative code
 - `optimize.cat` - library of optimization/inlining functions (code rewriting to expand function calls)
@@ -77,34 +80,45 @@ Below are some selected examples from `examples/` directory. Look there to find 
 
 # What's new?
 
-The old (very clean) implementation used switch+function dispatch, and every val was stored as a type+union struct.
-This was great for VM debugging, but quite slow. Profiling with valgrind showed memory, dispatch, function call, and typechecking overheads dominated overall CPU time.
+### address sanitizer
+added makefile targets for building and testing concat using address sanitizer
+- finds an overlapping but different set of memory bugs compared to valgrind
 
-To address the above bottlenecks, I've completely rewritten the VM using token-threading and val boxing.
-For now the implementation is just focused on 64bit CPUs (with 47 or less bits of canonical address space), but the new design is much lighter and faster, so also gets closer to fitting on small MCUs.
 
-Process forking and basic networking support has now also been added.
+### debug val support:
 
-The new implementation uses a 3-state token-threaded VM with 64bit boxed vals.
+The basic idea is that when compiled with `DEBUG_VAL`, every val is paired with a second debug val.
+Since the debug val is just a val, you can do anything you want with it.
 
-- 3 states based on stack contents, which lets many opcodes have at least one state where they can skip all stack checks
-  - huge reduction in checks for whether or not we have the arguments for an op
-  - For unoptimized code we still need all the typechecks, but with the boxing (see below) these are also faster
-  - see comments `vm.c` for a more complete description of the VM states
-- all vals now boxed into 64bits using inverse pointer unboxing - either the val is directly contained in the 64 bits, or is a tagged pointer to a struct with the rest of the val information
-  - opcodes, 32 bit integers (up to 47 bits supported), and doubles are stored directly in the 64bit field
-    - greatly reduces both storage overhead and allocation/deallocation costs for simple types
-  - extended types (lists, strings, dictionaries, references, ...) store a tagged pointer to a struct in the 64bit field
-    - the tagging lets the VM do basic typechecking (string/list/other) without dereferencing the struct, and also point to several different struct types
-  - relies on the fact that 64bit pointers don't (usually, currently) have 64 bits of usuable address space, and IEEE754 64bit double NaNs have enough spare bits we can play with to store a pointer along with some tag bits - in current x86\_64 a canonical pointer is just 47 bits
-    - the current implementation is somewhat architecture-specific (assuming 47bit canonical pointers), so will need changing for other/future architectures
-    - some CPUs are already up to 52+bits usable address space, so this will need to be revisited at some point (see val.h notes for some other tagging options)
-    - on an 8bit MCU implementation we'll likely use smaller boxes and might either drop floats/doubles or make them extended (tagged pointer) types
-  - see `val.h` for the details on how the bits are packed and some notes on other bit packing / pointer tagging options
-- token-threaded dispatch (with space to implement direct-threading later for compiled/optimized bytecode)
-  - in the VM core we jump directly to the next opcode with a computed goto (based on opcode and VM state) instead of the old switch+function dispatch
-  - the loop iteration, switch statement, and function call of the old impl. made up most of overall CPU time for computation-heavy code, so this shaves a lot of cycles off the minimum cycles-per-instruction
-  - with the 3 VM states, the computed goto skips unecessary stack checks and can jump straight to the type checks or operation
+Compiled with `DEBUG_VAL_EVAL`, debug vals have the additional power that if they are an eval type
+they get eval'd instead of the regular val they are attached to (with the regular val on the stack).
+
+With debug vals you can make any val evaluate as anything else, so it provides unlimited debug flexibility
+
+Some ideas for new debug vals:
+- source code tracking - for each line of code evaluated add debug vals with source file+line
+- stack effects validation - automatically validate stack before/after code is evaluated
+- abstract interpreter - use debug val for abstract state and to make ops abstractly evaluated (see abstract.cat)
+
+
+Example - print state just before and after `+` is called:
+```
+\+ getdef                        # get the builtin definition of +
+[ vstate eval vstate ] debug_set # add the debug val to definition of +
+\+ def                           # redefine + (with above code attached)
+1 2 + 3 +                        # add 1 + 2 + 3
+```
+
+Output:
+```
+State: 1 2 op(+)  <|>  [ eval vstate ] [ 3 + ]
+State: 3  <|>  [ 3 + ]
+State: 3 3 op(+)  <|>  [ eval vstate ]
+State: 6  <|>
+( 6 )
+```
+- note in above output 2 pairs of state lines (one before/after each +), with a single 6 on the stack at the end (1+2+3)
+
 
 
 # Language Features:
@@ -153,11 +167,14 @@ below are some of the features of the language (and VM):
     - e.g. string error message, stack contents
 
 ### debugging
-- some tools built in, with the language and VM support for better ones
-  - one of the basic types is vm, so you can put a concat VM with the code to debug on the stack, then run/inspect/manipulate that VM using concat
-  - it is easy to dump and inspect the entire state of the VM at any point (or trace VM state over time)
-  - no breakpoints built-in, but you can easily simulate one with a one-liner to step until some condition is met
-    - by inserting a debug call into the code (or writing a script to insert one at the desired location in the work stack), you can start in normal mode and then start a debugger just before the interesting part without any performance penalty
+- core tools built in, with the language and VM support for better ones to be implemented in concat
+- one of the basic types is vm, so you can put a concat VM with the code to debug on the stack, then run/inspect/manipulate that VM using concat
+- debug vals - flexible debugging core feature where every val has a second debug val attached (can be used to add info or control evaluation)
+- no breakpoints built-in, but there are a number of ways you can control debug evaluation:
+  - one-liner to step until some condition is met (i.e. break condition)
+  - attach a debug val to the target val (i.e. eval any debug code when target is eval'd)
+  - insert `debug` call into the code (or write a script to insert one at the desired location in the code/work stack)
+- it is easy to dump and inspect the entire state of the VM at any point (or trace VM state over time)
 
 ### comprehensive printf implementation
  - full printf format parser (with some adjustments to argument interpretation for stack-based languages like concat)
@@ -307,14 +324,15 @@ One of the goals for this project is a cross-platform bytecode supporting resour
 - comprehensive printf
 - threading and thread synchronization primitives
   - these work correctly (see various thread examples) with the exception that there are some shared global buffers for IO in the existing implementation
-  - we still need a threadsafe memory pool allocator (so we can use the new memory pool code and cut down on malloc/free)
+  - we still need a threadsafe memory pool allocator (so we can reenable memory pool and cut down on malloc/free)
 - Networking - currently just basic TCP socket support, but with a few more ops we should have the primitives to do anything
 - example programs
     - quite a few already in examples/ directory, many of them well-documented
 - simple debugging tools exist
-    - existing tools are just a set of words added to the dictionary to manipulate/run/debug/inspect concat VMs
+    - existing tools are just a set of words added to the dictionary to to operate on debug vals and concat vms
     - set up to easily support writing new debugging tools in concat, and/or script debugging sessions
         - e.g. we don't have breakpoints, but you can write a one-liner to step through a program until a condition is met
+        - debug vals provide a very flexible base to build any other type of debugger on
 
 
 # Where is it going?
@@ -324,6 +342,7 @@ The next goals for concat are:
   - token-threaded bytecode VM instead of stack of heavy structs using function-dispatch (was easy to debug, but lots of overhead) *DONE*
   - macros to help avoid repitition of the important lists (opcodes, exceptions, type handlers) *DONE*
   - reduce redundant argument checking, and confirm all arguments are checked once *WIP, mostly done*
+  - write complete documentation for new vm and val interface *WIP*
   - new round of profiling
   - break the "purity" of the loop natives to allow hiding args under loop on the work-stack instead of shuffling to the stack and back on every loop
 2. Finish comprehensive test suite

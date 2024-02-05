@@ -22,3 +22,7 @@ STATIC_ASSERT(N_BYTECODES<256,"number of basic bytecode ops doesn't fit into byt
 const char *opstrings[] =  { OPCODES(OP_STRING), TYPECODES(TYPE_STRING),"invalid" };
 #undef TYPE_STRING
 #undef OP_STRING
+
+#define EFFECT_STRING(op,opstr,effects) effects
+const char *op_effects[] =  { OPCODES(EFFECT_STRING), TYPECODES(EFFECT_STRING),"invalid" };
+#undef EFFECT_STRING

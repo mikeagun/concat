@@ -16,16 +16,19 @@
 #define __OPCODES_H__ 1
 
 //OPCODES - list of concat VM opcodes
-// - takes macro function with three arguments (C code opcode, concat opcode string, stack effects string)
-// TODO: normalize stack effects syntax, then add concat interface to get the stack effects (and also c code stack effects api to help with compiling)
-// TODO: fix quit opcode so stripped down VMs can use subset of core opcode range (plus interconstructions)
+// - takes macro function with 4 arguments (C code opcode, concat opcode string, stack effects string)
+// TODO: standardize stack/stack-effects comments to enable parsing/generation/validation
+// TODO: stack-effect parsing and composition (so we can generate/validate/analyze stack effects comments)
+//   - at least for a high level of abstraction/widening, but support for different levels of analysis would be good
+//   - could be either natives or implemented in concat
+// TODO: set fixed order for core opcodes, and set fixed id for quit opcode so stripped down VMs can use subset of core opcode range (plus interconstructions)
 #define OPCODES(opcode) \
   opcode(NULL,"NULL","--"), \
   opcode(end,"end","--"), \
   opcode(break,"break","--"), \
   opcode(eval,"eval","[A] -- A"), \
   opcode(parsecode,"parsecode","\"[A B]\" -- [A B]"), \
-  opcode(parsecode_,"parsecode_","\"[A B]\" -- ident([) A B ident(])"), \
+  opcode(parsecode_,"parsecode_","\"[A B]\" -- [ ident([) A B ident(]) ]"), \
   opcode(pop,"pop","A B -- A"), \
   opcode(swap,"swap","A B -- B A"), \
   opcode(dup,"dup","A -- A A"), \
@@ -83,6 +86,8 @@
   opcode(bit_or,"|","1 2 -- 3 | 2 3 -- 3"), \
   opcode(bit_xor,"xor","1 2 -- 3 | 3 3 -- 0"), \
   opcode(bit_not,"~",""), \
+  opcode(bit_lshift,"lshift","1 2 -- 4 | 1 3 -- 8"), \
+  opcode(bit_rshift,"rshift","4 1 -- 2 | 16 2 -- 4"), \
   opcode(lt,"<","1 2 -- 1 | 2 1 -- 0 | 2 2 -- 0"), \
   opcode(le,"le","2 1 -- 0 | 2 2 -- 1 | 1 2 -- 1"), \
   opcode(gt,">","2 1 -- 1 | 1 2 -- 0 | 2 2 -- 0"), \
@@ -166,8 +171,9 @@
   opcode(_popscope,"_popscope","-- {DICT}"), \
   opcode(usescope,"usescope","{DICT} [A] -- {DICT} _usescope A _popscope"), \
   opcode(usescope_,"usescope_","{DICT} [A] -- {DICT} _usescope A _endscope"), \
-  opcode(hhas,"hhas","{DICT} ident -- bool"), \
-  opcode(hget,"hget","{DICT} ident -- val"), \
+  opcode(dict_has,"dict.has","{DICT} ident -- bool"), \
+  opcode(dict_get,"dict.get","{DICT} ident -- val"), \
+  opcode(dict_put,"dict.put","{DICT} val ident --"), \
   opcode(open,"open","\"path\" \"mode\" -- file(\"path\")"), \
   opcode(close,"close","file() --"), \
   opcode(readline,"readline","file() -- file() \"line\""), \
@@ -218,12 +224,21 @@
   opcode(close_list,")","--"), \
   opcode(catch_interactive,"catch_interactive","--"), \
   opcode(quit,"quit","--"), \
+  opcode(debug_eval,"debug_eval","--"), \
+  opcode(debug_noeval,"debug_noeval","--"), \
+  opcode(debug_set,"debug_set","a b -- a{dbg(b)}"), \
+  opcode(debug_get,"debug_get","a{dbg(b)} -- a b"), \
+  opcode(ifdebug,"ifdebug","[A] -- | A"), \
   opcode(fork,"fork","-- A"), \
-  opcode(socket,"socket","-- A"), \
-  opcode(socket_listen,"socket.listen","A B C -- A"), \
-  opcode(socket_accept,"socket.accept","A -- A B"), \
-  opcode(socket_connect,"socket.connect","A B C -- A")
+  opcode(socket,"socket","-- fd(A)"), \
+  opcode(socket_dgram,"socket.dgram","-- fd(A)"), \
+  opcode(socket_listen,"socket.listen","fd(A) B C -- fd(A)"), \
+  opcode(socket_accept,"socket.accept","fd(A) -- fd(A) fd(B)"), \
+  opcode(socket_connect,"socket.connect","fd(A) B C -- fd(A)"), \
+  opcode(effects,"effects","\\dup -- \"A -- A A\"")
 
+//TYPECODE - list of concat VM typecodes (opcodes used in bytecode for storing vals)
+// - takes macro function with three arguments (C code opcode, concat opcode string, stack effects string)
 #define TYPECODES(typecode) \
   typecode(int8,"int8",""), \
   typecode(int32,"int32",""), \
@@ -239,6 +254,103 @@
   typecode(ref,"ref",""), \
   typecode(file,"file",""), \
   typecode(vm,"vm","") \
+
+//TODO: macros for builtin vm dictionary (to normalize vm code and feature set)
+// - WIP code below (BUILTIN* macros)
+//   - consider whether it goes here or in a new file
+//   - include stack comments (after syntax set) for automatic verification of builtins
+// - should make it easier to gen documentation and adjust vm size / features
+//   - also allow for precompiled dict to be swapped in easily
+// - might drop comma from end (since current code is list of statements)
+// - 3 categories: 
+//   - opcode builtins with defined dictionary words (might move into above macros)
+//   - static builtins - take word and val_t
+//   - compiled builtins - take word and string to compile
+//
+////BUILTIN_VALS - list of static concat builtins
+//// - takes macro function with two arguments (concat word, static val to store)
+//#define BUILTIN_VALS \
+//  builtin("lt",__op_val(OP_lt)), \
+//  builtin("gt",__op_val(OP_gt)), \
+//  builtin("eq",__op_val(OP_eq)), \
+//  builtin("stdin",TODO), \
+//  builtin("stdout",TODO), \
+//  builtin("stderr",TODO), \
+//  builtin("true",val_true), \
+//  builtin("false",val_false), \
+//  builtin("pi",__dbl_val(3.14159265358979323846)), \
+//  builtin("e",__dbl_val(2.71828182845904523536))
+//
+////BUILTINS - list of compiled concat builtins
+//// - takes macro function with two arguments (concat word, builtin definition)
+//#define BUILTINS \
+//  builtin_compile("printlf_","sprintlf pop"), \
+//  builtin_compile("printlf2_","sprintlf2 pop"), \
+//  builtin_compile("second","2 nth"), \
+//  builtin_compile("third","3 nth"), \
+//  builtin_compile("dsecond","2 dnth"), \
+//  builtin_compile("dthird","3 dnth"), \
+//  builtin_compile("fourth","4 nth"), \
+//  builtin_compile("fifth","5 nth"), \
+//  builtin_compile("sixth","6 nth"), \
+//  builtin_compile("seventh","7 nth"), \
+//  builtin_compile("eigth","8 nth"), \
+//  builtin_compile("ninth","9 nth"), \
+//  builtin_compile("tenth","10 nth"), \
+//  builtin_compile("dfourth","4 dnth"), \
+//  builtin_compile("dfifth","5 dnth"), \
+//  builtin_compile("dsixth","6 dnth"), \
+//  builtin_compile("dseventh","7 dnth"), \
+//  builtin_compile("deigth","8 dnth"), \
+//  builtin_compile("dninth","9 dnth"), \
+//  builtin_compile("dtenth","10 dnth"), \
+//  builtin_compile("2dup","dup2 dup2"), \
+//  builtin_compile("3dup","dup3 dup3 dup3"), \
+//  builtin_compile("2pop","pop pop"), \
+//  builtin_compile("3pop","pop pop pop"), \
+//  builtin_compile("popd","swap pop"), \
+//  builtin_compile("dupd","\\dup dip"), \
+//  builtin_compile("swapd","\\swap dip"), \
+//  builtin_compile("wrap2","wrap lpush"), \
+//  builtin_compile("wrap3","wrap lpush lpush"), \
+//  builtin_compile("mapnth","dup [ swapd 0 swap swapnth bury2 \\eval dip ] dip swapd setnth"), \
+//  builtin_compile("dip2","2 dipn"), \
+//  builtin_compile("dip3","3 dipn"), \
+//  builtin_compile("dipe","dip eval"), \
+//  builtin_compile("apply","[\\expand dip eval] 2apply"), \
+//  builtin_compile("dig2","2 dign"), \
+//  builtin_compile("dig3","3 dign"), \
+//  builtin_compile("bury2","2 buryn"), \
+//  builtin_compile("bury3","3 buryn"), \
+//  builtin_compile("flip3","3 flipn"), \
+//  builtin_compile("flip4","4 flipn"), \
+//  builtin_compile("each","[ dup3 size [ [ \\lpop dip dup dip2 ] dip dup eval ] if ] dup eval pop pop pop"), \
+//  builtin_compile("eachr","[ dup3 size [ [ \\rpop dip dup dip2 ] dip dup eval ] if ] dup eval pop pop pop"), \
+//  builtin_compile("while","[ dup3 dip3 dig3 [ [ dup dip2 ] dip dup eval ] if ] dup eval pop pop pop"), \
+//  builtin_compile("times","[ dup3 0 > [ [ \\dec dip dup dip2 ] dip dup eval ] if ] dup eval pop pop pop"), \
+//  builtin_compile("loop_","[[dup dip] dip dup eval] dup eval"), \
+//  builtin_compile("filter","dup2 clearlist flip3 [ flip3 dup3 flip3 dup dip3 [ dig2 \\rpush \\popd ifelse] dip ] each pop"), \
+//  builtin_compile("filter2","[ dup clearlist dup flip3 ] dip swap [ bury3 \\dup dip3 dup 4 dipn 4 dign [ \\rpush dip2 ] [ [ swapd rpush ] dip ] ifelse ] each pop"), \
+//  builtin_compile("map","dup2 clearlist flip3 [ bury2 dup dip2 \\rpush dip ] each pop"), \
+//  builtin_compile("mapr","dup2 clearlist flip3 [ bury2 dup dip2 \\lpush dip ] eachr pop"), \
+//  builtin_compile("mmap","dup2 clearlist flip3 [ bury2 dup dip2 \\rappend dip ] each pop"), \
+//  builtin_compile("cleave","dup clearlist swap [ swap [sip swap] dip rpush ] each swap pop"), \
+//  builtin_compile("spread","dup clearlist swap dup size swap [ dup2 inc dipn dup inc dign dig2 rpush swap dec ] each pop"), \
+//  builtin_compile("bi","[ dup2 \\eval dip ] dip eval"), \
+//  builtin_compile("tri","[ dup2 \\eval dip ] dip2 [ dup2 \\eval dip ] dip eval"), \
+//  builtin_compile("findp","0 1 [ [ inc dup3 empty [ pop 0 0 ] 1 ifelse ] 0 ifelse ] [ \\lpop dip2 dup2 dip3 dig3 not ] while popd popd dec"), \
+//  builtin_compile("evalr","[dup2 ispush [swap dip dup eval] unless] dup eval pop pop"), \
+//  builtin_compile("linrec","dig2 [ [ 4 dupn 4 dipn 4 dign not [ inc dup3 4 dipn dup2 eval ] if ] 0 dup2 eval [ pop pop pop ] dip ] dip2 dip2 times"), \
+//  builtin_compile("binrec","[ 5 dupn 5 dipn 5 dign [ 4 dupn 5 dipn ] [ dup3 5 dipn 5 dign dup2 dip 5 buryn dup eval dup2 5 dipn ] ifelse ] dup eval pop pop pop pop pop"), \
+//  builtin_compile("openr","\"r\" open"), \
+//  builtin_compile("include","fopenr eval"), \
+//  builtin_compile("writeline","\"\n\" cat write"), \
+//  builtin_compile("eachline","swap [ readline dup isint not ] [ bury2 dup2 dip2 ] while [pop pop] dip"), \
+//  builtin_compile("isferr","0 <"), \
+//  builtin_compile("isfeof","-18 =")
+//
+//  //builtin_compile("and","swap dip only bool"), \
+//  //builtin_compile("or","swap dip unless bool"), \
 
 //enum opcode_t   {   OP_end=0,  OP_break,   OP_native,   OP_keep_native,
 //    OP_int8,   OP_int64,   OP_double,   OP_qstring,   OP_string,   OP_ident,   OP_bytecode,   OP_empty_list,   OP_empty_code, OP_list, OP_code,
@@ -271,6 +383,7 @@
 // - should file operations have 'f' prefix (e.g. fopen/fclose/fread instead of open/close/read)
 // - ops for consideration:
 //   - ops that negligibly improve performance should likely be dropped (and if they don't improve performance or significantly reduce code size they definitely should be dropped)
+//   - stack-effects interface -- need to design one (and then add it) - main needs are parsing, composing, and validating
 //   - system ops -- there could be one "sys" opcode which takes an argument, or several base system ops
 //   - loop ops -- we should probably add a least a few basic ones (e.g. each,eachr,while,times, maybe map,filter), but rest can all be interconstructed
 //     - by having ops for the core loops we can cheat the stack to save cycles (e.g. store loop op under the op to reduce wstack/stack shuffling
@@ -305,4 +418,6 @@ typedef enum { OPCODES(OPCODE_ENUM), TYPECODES(TYPECODE_ENUM), N_BYTECODES } byt
 #undef OPCODE_ENUM
 
 extern const char *opstrings[];
+extern const char *op_effects[];
+
 #endif

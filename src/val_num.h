@@ -14,6 +14,8 @@
 
 #ifndef __VAL_NUM_H__
 #define __VAL_NUM_H__ 1
+// val_num.h - concat number (int/float) val interface
+//FIXME: refactor and sort out val_num/val_math distinction
 
 #include "val.h"
 

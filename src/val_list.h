@@ -14,14 +14,17 @@
 
 #ifndef __VAL_LIST_H__
 #define __VAL_LIST_H__ 1
+// val_list.h - concat list val interface (used for list and code/quotation vals)
 
 #include "val.h"
 
+//minimum allocation size
 #define LST_MIN_ALLOC 4
 
+//FIXME: document list val interface
 
-//used for formatting of list printing
-//  reverse: reverses indexing of elements (preint reverse order)
+//list_fmt_t - used for formatting of list printing
+//  reverse: reverses indexing of elements (print in reverse order)
 //  max_bytes: maximum number of chars to print
 //    - -1 for unlimited
 //    - prints as normal if print length <= max_bytes
@@ -76,6 +79,7 @@ val_t* _val_lst_begin(valstruct_t *v);
 val_t* _val_lst_off(valstruct_t *v, int i);
 val_t* _val_lst_end(valstruct_t *v);
 val_t* _val_lst_bufend(valstruct_t *v);
+unsigned int _val_lst_offset(valstruct_t *v);
 unsigned int _val_lst_len(valstruct_t *v);
 unsigned int _val_lst_size(valstruct_t *v);
 
@@ -126,6 +130,7 @@ err_t _val_lst_rburyn(valstruct_t *lst, unsigned int n); //bury rightmost el n i
 err_t _val_lst_rflipn(valstruct_t *lst, unsigned int n); //flip n right vals
 
 err_t _val_lst_deref(valstruct_t *lst);
+err_t _val_lst_cleanderef(valstruct_t *lst); //deref (or clean if singleref)
 err_t _val_lst_realloc(valstruct_t *v, unsigned int left, unsigned int right);
 err_t _val_lst_cat(valstruct_t *lst, valstruct_t *suffix);
 err_t _val_lst_lpush(valstruct_t *lst, val_t el);

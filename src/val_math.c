@@ -85,13 +85,13 @@ err_t val_num_parse(val_t *val, const char *s, unsigned int len) {
         case 0: break;
         case 3: case 4: case 5: case 8: state=9; break;
         case 9: break;
-        default: return -1;
+        default: return ERR_BADPARSE;
       }
     } else if (*p == '+' || *p == '-') {
       switch (state) {
         case 0: state=1; break;
         case 6: state=7; break;
-        default: return -1;
+        default: return ERR_BADPARSE;
       }
     } else if (isdigit(*p)) {
       switch(state) {
@@ -107,32 +107,27 @@ err_t val_num_parse(val_t *val, const char *s, unsigned int len) {
         case 7: state=8; break;
         case 8: break;
         case 10: state=3; break;
-        default: return -1;
+        default: return ERR_BADPARSE;
       }
     } else if (*p == '.') {
       switch(state) {
         case 0: case 1: state=2; break;
         case 3: case 10: state=4; break;
-        default: return -1;
+        default: return ERR_BADPARSE;
       }
     } else if (*p == 'e' || *p == 'E') {
       switch(state) {
         case 3: case 10: case 4: case 5: state=6; break;
-        default: return -1;
+        default: return ERR_BADPARSE;
       }
     } else if (state==10 && (*p=='x'||*p=='X')) {
-      double v;
-      int r;
-      if (0 > (r = _hfloat_parse(&v,s,len))) return r;
-
-      *val = __dbl_val(v);
-      return 0;
-    } else return -1;
+      return val_num_hex_parse(val,s,len);
+    } else return ERR_BADPARSE;
     switch(state) {
       case 1:
         if (*p == '+') ; //sign=1;
         else if (*p == '-') sign=-1;
-        else return -1;
+        else return ERR_BADPARSE;
         break;
       case 2: case 4:
         isfloat=1;
@@ -162,7 +157,7 @@ err_t val_num_parse(val_t *val, const char *s, unsigned int len) {
       case 7:
         if (*p == '+') ; //esign=1;
         else if (*p == '-') esign=-1;
-        else return -1;
+        else return ERR_BADPARSE;
         break;
       case 8:
         e *= 10;
@@ -180,7 +175,7 @@ err_t val_num_parse(val_t *val, const char *s, unsigned int len) {
         *val = __int_val(sign * digits);
         return 0;
       }
-    default: return -1;
+    default: return ERR_BADPARSE;
   }
 }
 err_t val_int_parse(val_t *val, const char *s, unsigned int len) {
@@ -197,9 +192,9 @@ err_t val_double_parse(val_t *val, const char *s, unsigned int len) {
 }
 
 
-//parse hex floating point literal (with optional 0x after optional sign)
+//parse hex string which could be int or float (with optional 0x after optional sign)
 // - uses a switch-based state machine to parse
-int _hfloat_parse(double *val, const char *s, unsigned int len) {
+err_t val_num_hex_parse(val_t *val, const char *s, unsigned int len) {
   int state = 0;
   // 0    1          2          3       4      5    6   7    8      9      10      11
   //init +/-  leading_decimal digits decimal digits e  +/- digits space leading_0   x
@@ -218,13 +213,13 @@ int _hfloat_parse(double *val, const char *s, unsigned int len) {
         case 0: break;
         case 3: case 4: case 5: case 8: state=9; break;
         case 9: break;
-        default: return -1;
+        default: return ERR_BADPARSE;
       }
     } else if (*s == '+' || *s == '-') {
       switch (state) {
         case 0: state=1; break;
         case 6: state=7; break;
-        default: return -1;
+        default: return ERR_BADPARSE;
       }
     } else if (ishex(*s)) {
       switch(state) {
@@ -240,28 +235,28 @@ int _hfloat_parse(double *val, const char *s, unsigned int len) {
         case 7: state=8; break;
         case 8: break;
         case 10: case 11: state=3; break;
-        default: return -1;
+        default: return ERR_BADPARSE;
       }
     } else if (*s == '.') {
       switch(state) {
         case 0: case 1: case 11: state=2; break;
         case 3: case 10: state=4; break;
-        default: return -1;
+        default: return ERR_BADPARSE;
       }
     } else if (*s == 'p' || *s == 'P') {
       switch(state) {
         case 3: case 4: case 5: case 10: state=6; break;
-        default: return -1;
+        default: return ERR_BADPARSE;
       }
     } else if (*s == 'x' || *s == 'X') {
       if (state==10) state=11;
-      else return -1;
-    } else return -1;
+      else return ERR_BADPARSE;
+    } else return ERR_BADPARSE;
     switch(state) {
       case 1:
         if (*s == '+') ;
         else if (*s == '-') neg=1;
-        else return -1;
+        else return ERR_BADPARSE;
         break;
       case 2: case 4:
         isfloat=1;
@@ -318,7 +313,7 @@ int _hfloat_parse(double *val, const char *s, unsigned int len) {
               if (mant>=(1L<<nbits)) { //rounding carried all the way over
                 mant>>=1; //drop final bit
               }
-              if (mant>=(1L<<nbits)) return -1; //should never happen (for debugging)
+              if (mant>=(1L<<nbits)) return ERR_BADPARSE; //should never happen (for debugging)
             } else {
               sticky=1; //keep waiting for a non-zero digit to determine rounding
             }
@@ -342,10 +337,182 @@ int _hfloat_parse(double *val, const char *s, unsigned int len) {
       case 7:
         if (*s == '+') ;
         else if (*s == '-') esign=-1;
-        else return -1;
+        else return ERR_BADPARSE;
         break;
       case 8:
-        if (*s>'9') return -1; //exponent is in decimal
+        if (*s>'9') return ERR_BADPARSE; //exponent is in decimal
+        e *= 10;
+        e += (*s-'0');
+        break;
+    }
+  }
+  switch(state) {
+    case 3: case 4: case 5: case 8: case 9: 
+      if (isfloat) {
+        e *= esign;
+        e += exp;
+        //double v = ldexp(copysign(mant,neg ? -1.0 : 1.0),e);
+        double v = (double)mant;
+        if (neg) v=-v;
+        v *= pow(2,e);
+        *val = __dbl_val(v);
+      } else {
+        *val = __int_val(mant);
+      }
+      return 0;
+    default: return ERR_BADPARSE;
+  }
+}
+
+//parse hex floating point literal (with optional 0x after optional sign)
+// - uses a switch-based state machine to parse
+err_t _hfloat_parse(double *val, const char *s, unsigned int len) {
+  int state = 0;
+  // 0    1          2          3       4      5    6   7    8      9      10      11
+  //init +/-  leading_decimal digits decimal digits e  +/- digits space leading_0   x
+  long int mant=0;
+  int sticky=0;
+  int nbits=0;
+  int neg=0;
+  int exp=0;
+  int e=0;
+  int esign=1;
+  int isfloat=0;
+  int n=0;
+  for(n=len; n; --n,++s) {
+    if (isspace(*s)) {
+      switch (state) {
+        case 0: break;
+        case 3: case 4: case 5: case 8: state=9; break;
+        case 9: break;
+        default: return ERR_BADPARSE;
+      }
+    } else if (*s == '+' || *s == '-') {
+      switch (state) {
+        case 0: state=1; break;
+        case 6: state=7; break;
+        default: return ERR_BADPARSE;
+      }
+    } else if (ishex(*s)) {
+      switch(state) {
+        case 0: case 1:
+          if (*s=='0' && state<2) state=10;
+          else state=3;
+          break;
+        case 2: state=5; break;
+        case 3: break;
+        case 4: state=5; break;
+        case 5: break;
+        case 6: state=8; break;
+        case 7: state=8; break;
+        case 8: break;
+        case 10: case 11: state=3; break;
+        default: return ERR_BADPARSE;
+      }
+    } else if (*s == '.') {
+      switch(state) {
+        case 0: case 1: case 11: state=2; break;
+        case 3: case 10: state=4; break;
+        default: return ERR_BADPARSE;
+      }
+    } else if (*s == 'p' || *s == 'P') {
+      switch(state) {
+        case 3: case 4: case 5: case 10: state=6; break;
+        default: return ERR_BADPARSE;
+      }
+    } else if (*s == 'x' || *s == 'X') {
+      if (state==10) state=11;
+      else return ERR_BADPARSE;
+    } else return ERR_BADPARSE;
+    switch(state) {
+      case 1:
+        if (*s == '+') ;
+        else if (*s == '-') neg=1;
+        else return ERR_BADPARSE;
+        break;
+      case 2: case 4:
+        isfloat=1;
+        break;
+      case 3:
+      case 5:
+        if (nbits>=VALDBL_MANT_BITS) { //we already have all our bits, just check for rounding/exponent changes
+          if (state==3) exp+=4;
+          if (sticky) {
+            if (*s!='0') { //trigger rounding
+              sticky=0;
+              mant++;
+              if (mant>=(1L<<nbits)) { //rounding carried all the way over
+                mant>>=1; //drop final bit
+              }
+            }
+          } //else we don't have to do anything
+          break;
+        } else if (nbits>0 && nbits+4<VALDBL_MANT_BITS) { //simple case, just append the bits and continue
+          mant <<= 4;
+          mant += dehex(*s);
+          nbits+=4;
+          if (state==5) exp-=4;
+        } else if (nbits+4>=VALDBL_MANT_BITS) { //we've already got our bits, update rounding and escape
+          char h = dehex(*s);
+          //first take the bits we need from h
+          int need = VALDBL_MANT_BITS-nbits;
+          mant <<= need;
+          mant += (h>>(4-need));
+          h &= (1<<(4-need))-1;
+
+          int bits=4-need; //how many bits we have left in h
+          nbits+=need;
+          if (state==5) exp-=need;
+          else exp+=bits;
+          if (bits==0) { //ran out of bits exactly, so need to look ahead
+            if (len>0) {
+              if (ishex(s[1]) && s[1]>='8') {
+                --n;++s;
+                h=dehex(*s);
+                if (state==3) exp+=4;
+              } else if (s[1] == '.' && len>1 && ishex(s[2]) && s[2]>='8') {
+                n-=2;s+=2;
+                h=dehex(*s);
+              }
+            } //else no carry needed so we are done (at least with mantissa)
+            bits=4;
+          }
+
+          if (h&(1<<(bits-1))) { //if first truncated bit is a 1 we may have to round up (otherwise we are done)
+            h &= (1<<(bits-1))-1;
+            if (mant&1 || h) {
+              mant++;
+              if (mant>=(1L<<nbits)) { //rounding carried all the way over
+                mant>>=1; //drop final bit
+              }
+              if (mant>=(1L<<nbits)) return ERR_BADPARSE; //should never happen (for debugging)
+            } else {
+              sticky=1; //keep waiting for a non-zero digit to determine rounding
+            }
+          }
+        } else { //nbits == 0, initialize with bits from leading hex char
+          mant = (*s>'9') ? 9 + (*s&0xf) : (*s-'0');
+          if (state==5) {
+            nbits=4;
+            exp-=4;
+          }
+          else if (mant>7) nbits=4; //determine sig-bits of leading hex digit
+          else if (mant>3) nbits=3;
+          else if (mant>1) nbits=2;
+          else if (mant>0) nbits=1;
+          //else nbits=0; //default to zero so we try again with next digit
+        }
+        break;
+      case 6:
+        isfloat=1;
+        break;
+      case 7:
+        if (*s == '+') ;
+        else if (*s == '-') esign=-1;
+        else return ERR_BADPARSE;
+        break;
+      case 8:
+        if (*s>'9') return ERR_BADPARSE; //exponent is in decimal
         e *= 10;
         e += (*s-'0');
         break;
@@ -360,50 +527,41 @@ int _hfloat_parse(double *val, const char *s, unsigned int len) {
       if (neg) *val=-*val;
       *val *= pow(2,e);
       return len;
-    default: return -1;
+    default: return ERR_BADPARSE;
   }
 }
 
 
 inline void _val_dbl_add(val_t *a, val_t b) {
-  *a=~*a;
-  b=~b;
-  *(double*)a += *(double*)b; 
-  *a=~*a;
+  double x = __val_dbl(*a) + __val_dbl(b);
+  __val_set(a,__dbl_val(x));
 }
 inline void _val_dbl_sub(val_t *a, val_t b) {
-  *a=~*a;
-  b=~b;
-  *(double*)a -= *(double*)b; 
-  *a=~*a;
+  double x = __val_dbl(*a) - __val_dbl(b);
+  __val_set(a,__dbl_val(x));
 }
 inline void _val_dbl_mul(val_t *a, val_t b) {
-  *a=~*a;
-  b=~b;
-  *(double*)a *= *(double*)b; 
-  *a=~*a;
+  double x = __val_dbl(*a) * __val_dbl(b);
+  __val_set(a,__dbl_val(x));
 }
 inline void _val_dbl_div(val_t *a, val_t b) {
-  *a=~*a;
-  b=~b;
-  *(double*)a /= *(double*)b; 
-  *a=~*a;
+  double x = __val_dbl(*a) / __val_dbl(b);
+  __val_set(a,__dbl_val(x));
 }
 inline void _val_dbl_neg(val_t *a) {
-  //*a=~*a;
-  //*(double*)a = -(*(double*)a);
-  //*a=~*a;
-  *a ^= 1UL << 63; //directly flip sign bit
+  //double x = -__val_dbl(*a);
+  //__val_set(a,__dbl_val(x));
+  *a ^= (val_t)1UL << 63; //directly flip sign bit
 }
 inline void _val_dbl_inc(val_t *a) {
-  *a=~*a;
-  ++(*(double*)a);
-  *a=~*a;
+  double x = __val_dbl(*a);
+  ++x;
+  __val_set(a,__dbl_val(x));
 }
 inline void _val_dbl_dec(val_t *a) {
-  *a=~*a;
-  --(*(double*)a);
-  *a=~*a;
+  double x = __val_dbl(*a);
+  --x;
+  __val_set(a,__dbl_val(x));
 }
 
 inline void _val_int32_add(val_t *a, val_t b) { *(int32_t*)a += __val_int(b); }
@@ -415,6 +573,8 @@ inline void _val_int32_inc(val_t *a) { ++(*(int32_t*)a); }
 inline void _val_int32_dec(val_t *a) { --(*(int32_t*)a); }
 
 //TODO: consider generating case integer, then we can use switch statement (or computed goto) to handle all cases
+
+
 #define _val_num_binop(op,case_dd,case_di,case_id,case_ii) \
 inline int val_##op(val_t *a, val_t b) { \
   if (val_is_double(*a)) { \

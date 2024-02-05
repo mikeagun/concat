@@ -29,6 +29,7 @@
 //  - sets interactive mode -- read from stdin, restart vm (keeping stack & dict) on exception
 //  - takes -e "expression" args for commandline concat code to eval (append onto work stack)
 //  - takes -f filename args for files to append onto the work stack
+
 //concat interpreter
 //- TODO: long integer support (at least 64 bits)
 //- TODO: finish bytecode, and implement ephemeral/persistant bytecode -- light embedded vms may only read vals/bytecode (not parse text)
@@ -77,6 +78,11 @@ int main(int argc, char *argv[]) {
   vm_t vm;
   err_t r;
   val_t t;
+  // by default concat prints stack (if not empty) on completing work stack
+  // - if quit op is eval'd, concat just exits
+  // - printed as a list ('V' format)
+  // - if quiet is set (-q command line argument), concat just exits
+  int quiet = 0;
 
   if (vm_init(&vm)) {
     fprintf(stderr,"Failed to initialize vm\n");
@@ -156,6 +162,8 @@ int main(int argc, char *argv[]) {
           printf("ERROR: failed to set debug-catch mode");
           return 1;
         }
+      } else if (!strcmp(arg,"-q")) { //quiet mode (don't print non-empty stack on normal exit)
+        quiet = 1;
       } else if (!strcmp(arg,"--")) {
         break;
       } else {
@@ -220,7 +228,11 @@ int main(int argc, char *argv[]) {
   if (err_isfatal(r)) {
     vm_pfatal(r);
     return -1;
-  } else if (r) vm_perror(&vm);
+  } else if (r) {
+    vm_perror(&vm);
+  } else if (!quiet && !vm_empty(&vm)) {
+    r = vm_stackline(&vm);
+  }
 
   vm_destroy(&vm);
   return r;

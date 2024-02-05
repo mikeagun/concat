@@ -12,6 +12,8 @@
 #See the License for the specific language governing permissions and
 #limitations under the License.
 
+//FIXME: this needs updating (out of date with vm.c/opcodes.h)
+
 //type checking ops
 isnum       - (A -- B)
 isstring    - (A -- B)

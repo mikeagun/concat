@@ -33,8 +33,8 @@
 
 
 
-inline double __val_dbl(val_t val) { val = ~val; return *((double*)(&val)); }
-inline val_t __dbl_val(const double f) { return ~( *((val_t*)&f) ); }
+inline double __val_dbl(val_t val) { *(uint64_t*)&val = ~(uint64_t)val; return *((double*)(&val)); }
+inline val_t __dbl_val(const double f) { return (val_t)(~( *((val64_t*)&f) )); }
 
 //valstruct_t* __val_ptr(val_t val) { return val_ptr(val); }
 //int32_t __val_int(val_t val) { return __val_int(val); }
@@ -51,6 +51,10 @@ DEFINE_NO_POOL(valstruct_t,4096,_valstruct_alloc,_valstruct_release)
 
 
 void val_destroy(val_t val) {
+#ifdef DEBUG_VAL
+  val_t dbg = __val_dbg_val(val);
+  if (!val_is_op(dbg)) val_destroy((val_t)dbg);
+#endif
   valstruct_t *v;
   switch(__val_tag(val)) {
     case _STR_TAG:
@@ -97,8 +101,17 @@ void val_destroyn(val_t *p, size_t n) {
 
 
 err_t val_clone(val_t *val, val_t orig) {
-  valstruct_t *p,*origp;
   err_t e;
+#ifdef DEBUG_VAL
+  val64_t dbg = __val_dbg_val(orig);
+  if (!val_is_op(dbg)) {
+    val_t dbg_clone;
+    if ((e = val_clone(&dbg_clone,(val_t)dbg))) return e;
+    dbg = (val64_t)dbg_clone;
+  }
+  //after this point (when DEBUG_VAL), need to destroy dbg if err (goto bad_e)
+#endif
+  valstruct_t *p,*origp;
   //if (val_is_double(val) || val_is_ptr(val)) {
   //  return val;
   //} else {
@@ -109,7 +122,7 @@ err_t val_clone(val_t *val, val_t orig) {
       origp = __str_ptr(orig);
       *p=*origp;
       if (p->v.str.buf) refcount_inc(p->v.str.buf->refcount);
-      *val = __str_val(p);
+      *val = __val_dbg(__str_val(p),dbg);
       return 0;
     case _LST_TAG:
       if (!(p = _valstruct_alloc())) return _fatal(ERR_MALLOC);
@@ -117,7 +130,7 @@ err_t val_clone(val_t *val, val_t orig) {
       origp = __lst_ptr(orig);
       *p=*origp;
       if (p->v.lst.buf) refcount_inc(p->v.lst.buf->refcount);
-      *val = __lst_val(p);
+      *val = __val_dbg(__lst_val(p),dbg);
       return 0;
     case _VAL_TAG:
       origp = __val_ptr(orig);
@@ -125,32 +138,47 @@ err_t val_clone(val_t *val, val_t orig) {
       //type clone function
       switch(origp->type) {
         case TYPE_DICT:
-          if ((e = _val_dict_clone(val,origp))) return e;
+          if ((e = _val_dict_clone(val,origp))) goto bad_e;
           break;
         case TYPE_REF:
-          if ((e = _val_ref_clone(val,origp))) return e;
+          if ((e = _val_ref_clone(val,origp))) goto bad_e;
           break;
         case TYPE_FILE:
-          if ((e = _val_file_clone(val,origp))) return e;
+          if ((e = _val_file_clone(val,origp))) goto bad_e;
           break;
         case TYPE_FD:
-          if ((e = _val_fd_clone(val,origp))) return e;
+          if ((e = _val_fd_clone(val,origp))) goto bad_e;
           break;
         case TYPE_VM:
-          if ((e = val_vm_clone(val,origp->v.vm))) return e;
+          if ((e = val_vm_clone(val,origp->v.vm))) goto bad_e;
           break;
         default:
           _fatal(ERR_NOT_IMPLEMENTED);
           //*p=*origp;
       }
+#ifdef DEBUG_VAL
+      __val_dbg_val(*val) = dbg;
+#endif
       return 0;
     case _TAG5:
       return _fatal(ERR_BADTYPE);
     default: //base case (for inlined val)
+#ifdef DEBUG_VAL
+      *val= __val_dbg(__val_dbg_strip(orig),dbg); //equivalent to below when DEBUG_VAL not defined
+#else
       *val=orig;
+#endif
       return 0;
   }
   //}
+bad_e:
+#ifdef DEBUG_VAL
+  //if we already cloned dbg, need to destroy
+  if (!val_is_op(dbg)) {
+    val_destroy(dbg);
+  }
+#endif
+  return e;
 }
 
 err_t val_clonen(val_t *val, val_t *orig, unsigned int n) {
@@ -168,6 +196,14 @@ err_t val_clonen(val_t *val, val_t *orig, unsigned int n) {
 }
 
 err_t val_validate(val_t val) {
+#ifdef DEBUG_VAL
+  val64_t dbg = __val_dbg_val(val);
+  if (!val_is_null(dbg)) {
+    err_t e;
+    if ((e = val_validate(dbg))) return e;
+  }
+#endif
+
   valstruct_t *v;
   if (val_is_double(val)) {
     return 0; //TODO: validate double (e.g. supported NaN values)
@@ -180,7 +216,8 @@ err_t val_validate(val_t val) {
       if (op < 0 || op >= N_OPS) return _throw(ERR_BADTYPE);
       return 0;
     case _INT_TAG:
-      return 0; //TODO: validate int is only 32 bits
+      if (__val_int47(val) >= (1UL << 32)) return _throw(ERR_BADTYPE);
+      return 0;
     case _STR_TAG:
       v = __str_ptr(val);
       off = v->v.str.off;
@@ -284,8 +321,7 @@ out_e:
 }
 
 int val_ispush(val_t val) {
-  if (val_is_int(val) || val_is_double(val)) return 1; //TODO: clean up ispush
-  else return !(val_is_op(val) || val_is_code(val) || val_is_ident(val) || val_is_file(val) || val_is_vm(val) || val_is_bytecode(val));
+  return val_is_int(val) || val_is_double(val) || val_is_list(val) || val_is_string(val);
 }
 
 //used when you want the evaluation of a val INSIDE A QUOTATION to result in the original val

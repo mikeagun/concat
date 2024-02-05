@@ -14,10 +14,15 @@
 
 #ifndef _VAL_FD_H_
 #define _VAL_FD_H_ 1
+// val_fd.h - concat fd (file descriptor) val interface (holds int file descriptor)
 
 #include "val.h"
 #include <sys/socket.h>
 //#include "vm.h"
+
+
+//FIXME: document fd val interface
+
 
 //TODO: come up with buffer/block manager for files
 //TODO: support threadsafe file io

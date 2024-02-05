@@ -14,9 +14,13 @@
 
 #ifndef _VAL_FILE_H_
 #define _VAL_FILE_H_ 1
+// val_file.h - concat file val interface (holds c FILE*)
 
 #include "val.h"
 //#include "vm.h"
+
+
+//FIXME: document file val interface
 
 //TODO: come up with buffer/block manager for files
 //TODO: support threadsafe file io

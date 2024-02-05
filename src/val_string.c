@@ -805,7 +805,6 @@ uint32_t _val_cstr_hash32(const char *s, unsigned int n) {
   }
   return h;
 }
-
 uint64_t _val_cstr_hash64(const char *s, unsigned int n) {
   register uint64_t h = 14695981039346656037u;
   for (; n; --n,++s) {

@@ -14,13 +14,40 @@
 
 #ifndef __VAL_STRING_H__
 #define __VAL_STRING_H__ 1
+//val_string.h - concat string val interface (also used for any val types containing byte array, e.g. ident)
 
 #include "val.h"
 
 #include <string.h>
 
-//gcc allows initialization of flexible array members, but c standard doesn't (i.e. .p below)
+// NOTES:
+// - copy-on-write with views - cloning string just adds buffer ref, and substring just updates view/window (copied on write when not sole owner)
+// - string valstruct contains view/window on underlying string buffer
+
+//FIXME: document string val interface
+// Interface:
+//   _val_str_* generic functions for working with string-type vals (valstructs)
+//
+//   Constructors/Destructors:
+//   -
+//
+//   Allocation/Reserving:
+//   -
+//
+//   Comparison/Testing:
+//   -
+//
+//   Modification/Concatenation:
+//   -
+//
+//   Identifiers:
+//
+
+//TODO: figure out way to support statically allocated string vals (see flex array notes below)
+//
+//NOTE: gcc allows initialization of flexible array members, but c standard doesn't (i.e. .p below)
 //#define CONST_STRING(name,string) sbuf_t name##_buf = { .size = sizeof(string)-1, .refcount = 1, .p = string }; valstruct_t name##_ = { .type = TYPE_STRING, .v.str = { .off = 0, .len = NONE, .buf = &name##_buf } };
+//
 //CONST_STRING(val_const_concat,"concat");
 //sbuf_t val_const_concat_buf = { .size = sizeof("concat")-1, .refcount = 1, .p = "concat" };
 //valstruct_t val_const_concat_ = { .type = TYPE_STRING, .v.str = { .off = 0, .len = NONE, .buf = &val_const_concat_buf } };
@@ -98,8 +125,8 @@ int _val_str_strcmp(valstruct_t *str, const char *cstr);
 int _val_str_find(valstruct_t *str, const char *substr, unsigned int len);
 int _val_str_findstr(valstruct_t *str, valstruct_t *substr);
 
-int _val_str_padright(valstruct_t *str, char c, int n);
-int _val_str_padleft(valstruct_t *str, char c, int n);
+err_t _val_str_padleft(valstruct_t *str, char c, int n);
+err_t _val_str_padright(valstruct_t *str, char c, int n);
 
 uint32_t _val_str_hash32(valstruct_t *str);
 uint64_t _val_str_hash64(valstruct_t *str);

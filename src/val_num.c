@@ -21,7 +21,6 @@
 #include <stdlib.h> //labs
 
 
-
 //printf functions
 
 int val_int32_fprintf(int32_t v, FILE *file, const struct printf_fmt *fmt) {

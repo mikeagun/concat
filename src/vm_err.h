@@ -71,6 +71,7 @@
   errcode(UNEXPECTED_EOL, "Unexpected end-of-list"), \
   errcode(UNEXPECTED_EOC, "Unexpected end-of-code"), \
   errcode(DICT, "Dictionary error"), \
+  errcode(NO_DEBUG, "Debug info not enabled"), \
   errcode(NO_DEBUGGEE, "No debuggee"), \
   errcode(DEBUGGEE_EMPTY, "Debuggee empty"), \
   errcode(BAD_OP, "Bad operation"), \
@@ -111,7 +112,11 @@ err_t err_parse(const char *str, unsigned int len);
 void err_fprintf(FILE *file, err_t err);
 void fatal_fprintf(FILE *file, err_t err);
 
+#ifdef DEBUG_VAL
+typedef __uint128_t val_t; //forward declaration for debug val_t
+#else
 typedef uint64_t val_t; //forward declaration
+#endif
 err_t errval_fprintf(FILE *file, val_t err);
 
 void vm_perrornum(err_t err);

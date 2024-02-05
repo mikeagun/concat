@@ -28,7 +28,7 @@
 #define VM_DEBUG_MEMBERS struct vmdebug_data *debug;
 
 #define VM_DEBUG_WPUSH(val) vm_debug_val_wpush(vm,val)
-#define VM_DEBUG_EVAL(val) vm_debug_val_eval(vm,val)
+#define VM_DEBUG_EVAL(val) vm_debug_eval(vm,val)
 
 #define VM_DEBUG_VAL_INIT(val) vm_debug_val_init(val,__func__)
 #define VM_DEBUG_VAL_NODESTROY(val) vm_debug_val_nodestroy(val)
@@ -91,7 +91,7 @@ int vm_debug_val_clone(val_t *val, val_t *orig);  //called when a val is cloned
 
 int vm_debug_val_wpush(vm_t *vm, val_t *val);  //called on value being pushed to work stack
 
-int vm_debug_val_eval(vm_t *vm, val_t *val);  //called before trying to eval a val
+int vm_debug_eval(vm_t *vm, val_t *val);  //called before trying to eval a val
 
 int _vm_debug_catch(vm_t *vm); //for trapping out to debugger
 int _vm_debug_fallback(vm_t *vm); //for trapping out to debugger as final fallback (don't push empty catch handler)

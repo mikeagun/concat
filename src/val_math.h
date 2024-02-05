@@ -14,6 +14,8 @@
 
 #ifndef __VAL_MATH_H__
 #define __VAL_MATH_H__ 1
+// val_num.h - concat math library
+//FIXME: refactor and sort out val_num/val_math distinction
 
 #include "val.h"
 
@@ -23,7 +25,9 @@ void _val_int32_todbl(val_t *a);
 err_t val_num_parse(val_t *val, const char *s, unsigned int len);
 err_t val_int_parse(val_t *val, const char *s, unsigned int len);
 err_t val_double_parse(val_t *val, const char *s, unsigned int len);
-int _hfloat_parse(double *val, const char *s, unsigned int len);
+err_t val_num_hex_parse(val_t *val, const char *s, unsigned int len);
+
+err_t _hfloat_parse(double *val, const char *s, unsigned int len);
 
 //defines several versions of binary op -- one typechecked, and several for if we already know the types and don't need to check
 #define _declare_val_num_binop(op) void _val_dbl_##op(val_t *a,val_t b); void _val_int32_##op(val_t *a, val_t b); int val_##op(val_t *a, val_t b); void _val_##op(val_t *a, val_t b);

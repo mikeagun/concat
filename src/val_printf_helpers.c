@@ -13,6 +13,7 @@
 //limitations under the License.
 
 #include "val_printf_helpers.h"
+#include "val_printf.h"
 #include "val_string.h"
 #include "val_list.h"
 #include "val_file.h"
@@ -38,35 +39,47 @@ void val_printf_clear(struct printf_fmt *fmt) {
 }
 
 int val_fprintf_(val_t val, FILE *file, const struct printf_fmt *fmt) {
-  //TODO: type_handlers array like old impl??? -- probably faster, definitely more compact and robust for the handle-all types functions (v.s. type-specific ops)
+  //TODO: type_handlers array like old impl??? -- probably faster, more compact/robust for the handle-all-types functions (but requires typecode)
+  //  - see val.h for typecode discussion
+  int r;
   switch(__val_tag(val)) {
     case _OP_TAG:
-      return val_op_fprintf(__val_op(val),file,fmt);
+      r = val_op_fprintf(__val_op(val),file,fmt);
+      break;
     case _STR_TAG:
       switch(__str_ptr(val)->type) {
         case TYPE_IDENT:
-          return val_ident_fprintf(__ident_ptr(val),file,fmt);
+          r = val_ident_fprintf(__ident_ptr(val),file,fmt);
+          break;
         case TYPE_STRING:
-          return val_string_fprintf(__string_ptr(val),file,fmt);
+          r = val_string_fprintf(__string_ptr(val),file,fmt);
+          break;
         //case TYPE_BYTECODE:
         default:
           return _throw(ERR_NOT_IMPLEMENTED);
       }
+      break;
     case _LST_TAG:
       //return val_list_fprintf_simple(__lst_ptr(val),file,fmt);
-      return val_list_fprintf(__lst_ptr(val),file,fmt);
+      r = val_list_fprintf(__lst_ptr(val),file,fmt);
+      break;
     case _VAL_TAG:
       switch(__val_ptr(val)->type) {
         case TYPE_DICT:
-          return val_dict_fprintf(__dict_ptr(val),file,fmt);
+          r = val_dict_fprintf(__dict_ptr(val),file,fmt);
+          break;
         case TYPE_REF:
-          return val_ref_fprintf(__ref_ptr(val),file,fmt);
+          r = val_ref_fprintf(__ref_ptr(val),file,fmt);
+          break;
         case TYPE_FILE:
-          return val_file_fprintf(__file_ptr(val),file,fmt);
+          r = val_file_fprintf(__file_ptr(val),file,fmt);
+          break;
         case TYPE_FD:
-          return val_fd_fprintf(__fd_ptr(val),file,fmt);
+          r = val_fd_fprintf(__fd_ptr(val),file,fmt);
+          break;
         case TYPE_VM:
-          return val_vm_fprintf(__vm_ptr(val),file,fmt);
+          r = val_vm_fprintf(__vm_ptr(val),file,fmt);
+          break;
         default:
           return _throw(ERR_NOT_IMPLEMENTED);
       }
@@ -74,14 +87,31 @@ int val_fprintf_(val_t val, FILE *file, const struct printf_fmt *fmt) {
     case _TAG5:
       return _fatal(ERR_BADTYPE);
     case _INT_TAG:
-      return val_int32_fprintf(__val_int(val),file,fmt);
+      r = val_int32_fprintf(__val_int(val),file,fmt);
+      break;
     default: //double
-      return val_double_fprintf(__val_dbl(val),file,fmt);
+      r = val_double_fprintf(__val_dbl(val),file,fmt);
+      break;
   }
+
+  if (r < 0) return r;
+
+#ifdef DEBUG_VAL
+  val64_t dbg = __val_dbg_val(val);
+  if (!val_is_null(dbg)) {
+    err_t e;
+    if (0>(e = val_fprint_cstr(file,"+debug("))) return e;
+    else r += e;
+    if (0>(e = val_fprintf_(dbg,file,fmt_V))) return e;
+    else r += e;
+    if (0>(e = val_fprint_ch(file,')'))) return e;
+    else r += e;
+  }
+#endif
+  return r;
 }
 
 int val_sprintf_(val_t val, valstruct_t *buf, const struct printf_fmt *fmt) {
-  //TODO: type_handlers array like old impl??? -- probably faster, definitely more compact and robust for the handle-all types functions (v.s. type-specific ops)
   int r;
   switch(__val_tag(val)) {
     case _OP_TAG:
@@ -135,6 +165,22 @@ int val_sprintf_(val_t val, valstruct_t *buf, const struct printf_fmt *fmt) {
       r = val_double_sprintf(__val_dbl(val),buf,fmt);
       break;
   }
+
+#ifdef DEBUG_VAL
+  if (r < 0) goto skip_debug;
+  val64_t dbg = __val_dbg_val(val);
+  if (!val_is_null(dbg)) {
+    err_t e;
+    if (0>(e = val_sprint_cstr(buf,"+debug("))) return e;
+    else r += e;
+    if (0>(e = val_sprintf_(dbg,buf,fmt_V))) return e;
+    else r += e;
+    if (0>(e = val_sprint_ch(buf,')'))) return e;
+    else r += e;
+  }
+skip_debug:
+#endif
+
 #ifdef SPRINTF_CHECK_RLEN
   if (buf) {
     int rb = val_sprintf_(val,NULL,fmt);

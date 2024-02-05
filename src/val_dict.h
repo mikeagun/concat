@@ -14,12 +14,45 @@
 
 #ifndef __VAL_DICT_H__
 #define __VAL_DICT_H__ 1
+// val_dict.h - concat dictionary val interface
+
+
 #include "val.h"
 
+// NOTES:
+// - copy-on-write - cloning dict just adds ref, writing to dict creates full clone
+// - scoped - child dictionaries write to current layer, and read through to parent/next when key not found
+//   - dict keeps next pointer to parent dict
+// - built on top of val_hash hashtable implementation
+
+// Interface:
+//   _val_dict_* functions operate on dictionary valstructs
+//
+//   Management:
+//   - init    - create new dictionary
+//   - clone   - clone dictionary (just adds reference)
+//   - destroy - destroy dictionary (and free resources)
+//   - deref   - clones underlying hashtable and releases old so dict has sole ownership
+//   
+//   Scoping:
+//   - newscope  - creates new dictionary layer (scope) to isolate writes (current dict then refers to child)
+//   - canpop    - whether dictionary is a child scope (has parent dict)
+//   - popscope  - pop scope off into new val (current dict then refers to parent)
+//   - dropscope - drop (pop and delete) child scope (current dict then refers to parent)
+//   - pushscope - push existing dict onto current as child scope (current dict then refers to child)
+//
+//   Read/Write:
+//   - get  - lookup key and get value in current/parent dict, or NULL if not found (NOTE: value is NOT cloned)
+//   - put  - write key-value pair into dict
+//   - put_ - like put but takes char pointer and length (automatically creates val to hold key string)
+//   - swap - swap value in dict (if in parent scope, clones instead of swaps)
+//
+
 void _val_dict_destroy_(valstruct_t *dict);
-int _val_dict_init(valstruct_t *dict);
-int _val_dict_clone(val_t *ret, valstruct_t *orig);
+err_t _val_dict_init(valstruct_t *dict);
+err_t _val_dict_clone(val_t *ret, valstruct_t *orig);
 void _val_dict_clone_(valstruct_t *ret, valstruct_t *orig);
+err_t _val_dict_deref(valstruct_t *dict);
 
 err_t _val_dict_newscope(valstruct_t *dict);
 int _val_dict_canpop(valstruct_t *dict);

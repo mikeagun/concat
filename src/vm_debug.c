@@ -621,7 +621,7 @@ int vm_debug_val_wpush(vm_t *vm, val_t *val) {
   return -1;
 }
 
-int vm_debug_val_eval(vm_t *vm, val_t *val) {
+int vm_debug_eval(vm_t *vm, val_t *val) {
   vm_qstate(vm);
   return -1;
 }

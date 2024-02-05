@@ -141,6 +141,7 @@ inline val_t* _val_lst_begin(valstruct_t *v) { return _val_lst_buf(v) + v->v.lst
 inline val_t* _val_lst_off(valstruct_t *v, int i) { return _val_lst_begin(v)+i; }
 inline val_t* _val_lst_end(valstruct_t *v) { return _val_lst_buf(v) + v->v.lst.off + _val_lst_len(v); }
 inline val_t* _val_lst_bufend(valstruct_t *v) { return _val_lst_buf(v) + _val_lst_size(v); }
+inline unsigned int _val_lst_offset(valstruct_t *v) { return v->v.lst.off; }
 inline unsigned int _val_lst_len(valstruct_t *v) { return v->v.lst.len; }
 inline unsigned int _val_lst_size(valstruct_t *v) { return v->v.lst.buf->size; }
 
@@ -569,6 +570,22 @@ err_t _val_lst_move(valstruct_t *lst, val_t *dst) { //moves contents of list v t
 err_t _val_lst_deref(valstruct_t *lst) {
   //argcheck_r(val_islisttype(list));
   if (!_val_lst_buf(lst) || _lst_singleref(lst)) {
+    return 0;
+  } else if (_val_lst_empty(lst)) {
+    _lst_release(lst);
+    lst->v.lst.buf = NULL;
+    lst->v.lst.off = 0; //TODO: needed???
+    return 0;
+  } else {
+    return _val_lst_realloc(lst,0,0); //TODO: how much lspace/rspace??? (keep old value, or reset to 0)
+  }
+}
+err_t _val_lst_cleanderef(valstruct_t *lst) {
+  //argcheck_r(val_islisttype(list));
+  if (!_val_lst_buf(lst)) {
+    return 0;
+  } else if(_lst_singleref(lst)) {
+    _val_lst_cleanclear(lst);
     return 0;
   } else if (_val_lst_empty(lst)) {
     _lst_release(lst);
@@ -1188,7 +1205,7 @@ int val_listp_sprintf_extra(valstruct_t *buf, val_t *p, int len, const list_fmt_
     if (buf) {
       if (lfmt->trunc_tail) {
         _val_str_substr(buf,0,_val_str_len(buf)-rlen+maxlen-lfmt->trunclen);
-        _val_str_cat_cstr(buf,lfmt->trunc,lfmt->trunclen); //guaranteed because we trunc'd from more than this
+        _val_str_cat_cstr(buf,lfmt->trunc,lfmt->trunclen); //guaranteed space because we trunc'd from more than this
       } else {
         char *bufstart = _val_str_end(buf)-rlen;
         char *truncstart = _val_str_end(buf)-maxlen-lfmt->trunclen;

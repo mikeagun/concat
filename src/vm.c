@@ -153,6 +153,7 @@ int vm_noeval(vm_t *vm) {
   return vm->noeval;
 }
 int _vm_qeval(vm_t *vm, valstruct_t *ident, err_t *e) { //pre-evaluate val (handles tokens that bypass noeval)
+  //TODO: add word that pushes current line number in file (at least in debug compile)
   //if (val_is_str(val) && __str_ptr(val)->type == TYPE_IDENT) {
     unsigned int len = _val_str_len(ident);
     char c='\0';
@@ -303,7 +304,10 @@ int vm_dict_put_(vm_t *vm, const char *opname, val_t val) {
 }
 int vm_dict_put(vm_t *vm, valstruct_t *opname, val_t val) {
   int r;
-  if (0 >= (r = _val_dict_put(&vm->dict,opname,val))) val_destroy(val);
+  if (0 >= (r = _val_dict_put(&vm->dict,opname,val))) {
+    _val_str_destroy(opname);
+    val_destroy(val);
+  }
   return r;
 }
 val_t vm_dict_get(vm_t *vm, valstruct_t *key) {
@@ -599,6 +603,8 @@ err_t _vm_init_dict(vm_t *vm) {
   if (0>(e = vm_dict_put_op(vm,OP_bit_or))) goto out_err;
   if (0>(e = vm_dict_put_op(vm,OP_bit_xor))) goto out_err;
   if (0>(e = vm_dict_put_op(vm,OP_bit_not))) goto out_err;
+  if (0>(e = vm_dict_put_op(vm,OP_bit_lshift))) goto out_err;
+  if (0>(e = vm_dict_put_op(vm,OP_bit_rshift))) goto out_err;
 
   if (0>(e = vm_dict_put_op(vm,OP_lt))) goto out_err;
   if (0>(e = vm_dict_put_(vm,"lt",__op_val(OP_lt)))) goto out_err;
@@ -691,8 +697,9 @@ err_t _vm_init_dict(vm_t *vm) {
   if (0>(e = vm_dict_put_op(vm,OP_savescope))) goto out_err;
   if (0>(e = vm_dict_put_op(vm,OP_usescope))) goto out_err;
   if (0>(e = vm_dict_put_op(vm,OP_usescope_))) goto out_err;
-  if (0>(e = vm_dict_put_op(vm,OP_hhas))) goto out_err;
-  if (0>(e = vm_dict_put_op(vm,OP_hget))) goto out_err;
+  if (0>(e = vm_dict_put_op(vm,OP_dict_has))) goto out_err;
+  if (0>(e = vm_dict_put_op(vm,OP_dict_get))) goto out_err;
+  if (0>(e = vm_dict_put_op(vm,OP_dict_put))) goto out_err;
 
   t = val_file_stdin_ref();
   if ((e = val_code_wrap(&t))) goto out_err;
@@ -748,6 +755,11 @@ err_t _vm_init_dict(vm_t *vm) {
   if (0>(e = vm_dict_put_op(vm,OP_close_list))) goto out_err;
   if (0>(e = vm_dict_put_op(vm,OP_quit)))goto out_err;
 
+  if (0>(e = vm_dict_put_op(vm,OP_debug_eval)))goto out_err;
+  if (0>(e = vm_dict_put_op(vm,OP_debug_noeval)))goto out_err;
+  if (0>(e = vm_dict_put_op(vm,OP_debug_set)))goto out_err;
+  if (0>(e = vm_dict_put_op(vm,OP_debug_get)))goto out_err;
+
   //
   //implementation-specific natives (opcodes after OP_quit)
   //
@@ -756,6 +768,7 @@ err_t _vm_init_dict(vm_t *vm) {
   if (0>(e = vm_dict_put_op(vm,OP_socket_listen)))goto out_err;
   if (0>(e = vm_dict_put_op(vm,OP_socket_accept)))goto out_err;
   if (0>(e = vm_dict_put_op(vm,OP_socket_connect)))goto out_err;
+  if (0>(e = vm_dict_put_op(vm,OP_effects)))goto out_err;
 
   //
   //named constants
@@ -853,6 +866,8 @@ err_t _vm_init_dict(vm_t *vm) {
   if (0>(e = vm_dict_put_compile(vm,"tri","[ dup2 \\eval dip ] dip2 [ dup2 \\eval dip ] dip eval"))) goto out_err;
   
   if (0>(e = vm_dict_put_compile(vm,"findp","0 1 [ [ inc dup3 empty [ pop 0 0 ] 1 ifelse ] 0 ifelse ] [ \\lpop dip2 dup2 dip3 dig3 not ] while popd popd dec"))) goto out_err;
+  //FIXME: sorted_findp
+  if (0>(e = vm_dict_put_compile(vm,"sorted_findp","0 dup3 size [ dup 0 > ] [ dup 2 / [ - dec ] sip dup 4 buryn [ splitn lpop swapd ] 4 dipn [ dup dip3 ] dip3 6 dign dup 0 = [ pop popd + \\3pop dip -1 ] [ 0 < [ swap [ + inc ] dip 4 dign pop ] [ popd dig3 pop ] ifelse_ ] ifelse_ ] while 0 = [ 3pop -1 ] if_"))) goto out_err;
 
   if (0>(e = vm_dict_put_compile(vm,"evalr","[dup2 ispush [swap dip dup eval] unless] dup eval pop pop"))) goto out_err;
   if (0>(e = vm_dict_put_compile(vm,"linrec","dig2 [ [ 4 dupn 4 dipn 4 dign not [ inc dup3 4 dipn dup2 eval ] if ] 0 dup2 eval [ pop pop pop ] dip ] dip2 dip2 times"))) goto out_err;
@@ -881,6 +896,9 @@ err_t vm_init(vm_t *vm) {
   vm->open_list = &vm->stack;
   vm->groupi=0;
   vm->noeval=0;
+#ifdef DEBUG_VAL_EVAL
+  vm->debug_val_eval = 0;
+#endif
   vm->state = STOPPED;
 
   if (!(vm->p = vm_get_parser())) return _throw(ERR_NO_PARSER);
@@ -1017,6 +1035,13 @@ int vm_listn(vm_t *vm, unsigned int n) {
   val_list_format_listn(&lfmt,n);
   return val_list_fprintf_(vm->open_list,stdout,&lfmt,fmt_V);
 }
+//print stack as list (this is used for print stack on exit)
+err_t vm_stackline(vm_t *vm) {
+  err_t e;
+  //if (0 > (e = val_list_fprintf_(vm->open_list,stdout,list_fmt_V,fmt_V))) return e;
+  if (0 > (e = val_fprintf(stdout, "%V\n", __lst_val(vm->open_list)))) return e;
+  return 0;
+}
 
 err_t vm_printstate(vm_t *vm) {
   printf("Stack:\n");
@@ -1098,10 +1123,11 @@ int vm_sprintf(vm_t *vm, valstruct_t *buf, const fmt_t *fmt) {
       0);
 }
 
+//FIXME: if top of stack is list, doesn't get proper truncation
 int _vm_sprintf(valstruct_t *buf, const fmt_t *fmt, val_t *stack, unsigned int stackn, val_t *work, unsigned int workn, val_t *cont, unsigned int contn, unsigned int topn, ...) {
   err_t r;
   int rlen=0;
-  const char *stacksep = "  <|>  ";
+  const char *stacksep = "  <|>  "; //separator between stack and work stack
   int stackseplen = 7;
 
   //if (vm->threadid>=0) {
@@ -1143,12 +1169,12 @@ int _vm_sprintf(valstruct_t *buf, const fmt_t *fmt, val_t *stack, unsigned int s
     if (0>(rw = val_listp_sprintf(NULL,work,workn,&wfmt,fmt_V))) return rw;
     if (rs+rw>stacklim) { //need truncation, choose appropriate limits for each stack
       //we want to use all available chars, and each stack should be guaranteed at least stacklim/2
-      if (rw <= stacklim/2) { //just need to truncate rs+re
+      if (rw <= stacklim/2) { //just need to truncate rs (stack)
         lfmt.max_bytes = stacklim-rw;
         if (lfmt.max_bytes < 3) lfmt.max_bytes = 3; //at least 3 chars for empty or ...
         //sublist_fmt.max_bytes = lfmt.max_bytes/2;
         //if (sublist_fmt.max_bytes < 3) sublist_fmt.max_bytes = 3;
-      } else if (rs <= stacklim/2) { //just need to truncate rw
+      } else if (rs <= stacklim/2) { //just need to truncate rw (work stack)
         wfmt.max_bytes = stacklim-rs;
         if (wfmt.max_bytes < 3) wfmt.max_bytes = 3; //at least 3 chars for empty or ...
         //wsublist_fmt.max_bytes = wfmt.max_bytes/2;
@@ -1231,42 +1257,27 @@ err_t _vm_reserve(valstruct_t *stackval, val_t **stackbase, val_t **stack, val_t
   err_t e;
   unsigned int rspace = _val_lst_len(stackval)/2;
   if (rspace < 4) rspace=4; //TODO: select good initialization and minimum values
-  if ((e = _val_lst_realloc(stackval,1,rspace))) return e; //we always keep one extra to the left so stack[-1] is always valid memory TODO: when do we need lspace???
+
+  unsigned int cur_rspace = stackval->v.lst.buf==NULL ? 0 : _val_lst_size(stackval) - _val_lst_len(stackval) - _val_lst_offset(stackval);
+
+  //FIXME: don't always need cleanderef, just for sprintf and aother times we can muck up stack
+  if (rspace <= cur_rspace) {
+    _val_lst_cleanderef(stackval);
+  } else { //need more space -- realloc
+    if ((e = _val_lst_realloc(stackval,1,rspace))) return e; //TODO: do/when do we need lspace -1???
+  }
   *stackbase = _val_lst_begin(stackval);
   *stack = _val_lst_end(stackval);
   *stackend = _val_lst_bufend(stackval);
   return 0;
 }
 
-//TODO: reconsider code structure
-//  - TODO: how do we implement single-stepping (something better than slice, save rest and insert break?)
-//  - TODO: should stacks push to right/left???
-//  - TODO: use *_rextend style for push/wpush/cpush (still treat top special) -- lets us push all error checking to the top to simplify leak prevention and also allows us to later skip error checks (and allocations) when safe
-//  - consider registers for the top 2 in the stack instead of just top
+// vm_dowork(vm) - evaluates work stack until empty or error
+// 
+// This function is the core vm work loop.
+// We keep pointers 
 //
 //
-//
-//  - my main goals were: keep it short, minimize number of conditionals in common cases, minimize CPU instructions-per-op
-//    - we duplicate some portions to eliminate some checks we always need otherwise, but want to balance code bloat and instructions-per-op
-//    - (mostly) duplicate eval handlers for in code / evaling vals directly from stack -- optimize instr/op when wtop is quotation
-//  - towards that end I've implemented dowork as a 3-state VM
-//    - state 0: unknown stack state, but at least 2 free slots in stack
-//    - state 1: top of stack in top, rest of stack unknown but at least 1 slot free
-//    - state 2: top of stack in top, stackn>0, unknown stack space
-//    - every opcode needs to be implemented for each state (though some are the same, and most fall through to eachother)
-//  - with 3 states, many opcodes have at least 1 state where they run free wrt the stack (no stack checks)
-//    - we still need typechecks because this is the pure unoptimized interpreter (0-2 bit twiddles + 1 conditional for the main types)
-//      - with pre-optimized code (at least where typesafety can be guaranteed), can skip typechecks and run direct/token-threaded code
-//    - the less-convenient cases can be coerced to the desired state and then fall through in many cases (so << 3X the code for 3 labels per op)
-//      - this tends to result in suboptimal code in some cases (that may not be compiler-optimizable), but we can later optimize the ones that matter
-//        - e.g. extra jumps in code, instead of duplicating an instruction
-//    - the cost for reducing conditionals on the stack is that we need to update state during most ops (so we can then jump to the appropriate state)
-//      - TODO: document some benchmarking between 1/2/3 state vm (I tried 1 and 3, 3 was significantly faster, but 2 was never tested)
-
-//dowork - this is the core VM evaluation function -- it evaluates until it finishes, hits a stop point (like [break]), or throws an unhandled exception
-// - based around token-threaded dispatch, with mostly (heavier) token threading used for normal evaluation, and pure token threading used for bytecode evaluation
-//   - i.e. vm opcode execution consists of calls like `goto lookuptable[opcode]`
-//   - in the best case a switch statement should be just as fast, and more readable and maintainable, but in practice (based on benchmarking the original impl) is significantly slower and doesn't let us play tricks like shortcutting loops, which can save siginificant numbers of CPU cycles
 err_t vm_dowork(vm_t *vm) {
 #define OP_LABEL0(op,opstr,effects) &&op_##op##_0
 #define OP_LABEL1(op,opstr,effects) &&op_##op##_1
@@ -1276,6 +1287,49 @@ err_t vm_dowork(vm_t *vm) {
 #undef OP_LABEL1
 #undef OP_LABEL2
   const void **stateops[] = { _ops, _ops+N_OPS, _ops+2*N_OPS };
+
+  // - my main goals were: keep it short, minimize number of conditionals in common cases, minimize CPU instructions-per-op
+  //   - we duplicate some portions to eliminate some checks we always need otherwise, but want to balance code bloat and instructions-per-op
+  //   - (mostly) duplicate eval handlers for in code / evaling vals directly from stack -- optimize instr/op when wtop is quotation
+  // - towards that end I've implemented dowork as a 3-state VM
+  //   - state 0: unknown stack state, but at least 2 free slots in stack
+  //   - state 1: top of stack in top, rest of stack unknown but at least 1 slot free
+  //   - state 2: top of stack in top, stackn>0, unknown stack space
+  //   - every opcode needs to be implemented for each state (though some are the same, and most fall through to eachother)
+  // - with 3 states, many opcodes have at least 1 state where they run free wrt the stack (no stack checks)
+  //   - we still need typechecks because this is the pure unoptimized interpreter (0-2 bit twiddles + 1 conditional for the main types)
+  //     - with pre-optimized code (at least where typesafety can be guaranteed), can skip typechecks and run direct/token-threaded code
+  //   - the less-convenient cases can be coerced to the desired state and then fall through in many cases (so << 3X the code for 3 labels per op)
+  //     - this tends to result in suboptimal code in some cases (that may not be compiler-optimizable), but we can later optimize the ones that matter
+  //       - e.g. extra jumps in code, instead of duplicating an instruction
+  //   - the cost for reducing conditionals on the stack is that we need to update state during most ops (so we can then jump to the appropriate state)
+  //     - TODO: document some benchmarking between 1/2/3 state vm (I tried 1 and 3, 3 was significantly faster, but 2 was never tested)
+  //
+  // TODO: reconsider code structure (debug step, rextend, top2 vars)
+  //   - consider registers for the top 2 in the stack instead of just top (would need profiling to support it)
+  //   - how do we implement single-stepping (something better than slice, save rest and insert break?) -- debug_val solves this I think
+  //   - use *_rextend style for push/wpush/cpush (still treat top special) -- lets us push all error checking to the top to simplify leak prevention and also allows us to later skip error checks (and allocations) when safe
+  //
+  // TODO: consider abstract interpreter VM
+  //   - would determine stack effects just by evaluation
+  //     - i.e. abstract VM performs abstract evaluation of stack effects
+  //   - this could give the best performance, which may allow for some interesting tools
+  //     - e.g. live bug checking and coding assistance
+  //   - implement by adding abstract_vm val type (and a few opcodes to work with it)
+  //   - maintains an abstract state and tags each val with an abstract type
+  //   - support for various abstract domains for each concrete/abstract type
+  //     - also a way to tie-in custom domains
+  //   - widening operators to control granularity
+  //
+  //
+  //
+
+  //dowork - this is the core VM evaluation function -- it evaluates until it finishes, hits a stop point (like [break]), or throws an unhandled exception
+  // - based around token-threaded dispatch, with mostly (heavier) token threading used for normal evaluation, and pure token threading used for bytecode evaluation
+  //   - i.e. vm opcode execution consists of calls like `goto lookuptable[opcode]`
+  //   - in the best case a switch statement should be just as fast, and more readable and maintainable, but in practice (based on benchmarking the original impl) is significantly slower and doesn't let us play tricks like shortcutting loops, which can save siginificant numbers of CPU cycles
+
+
 
   //TODO: explicitly clean stackval & workval, keep them clean, then just clear them before leaving (or switching stacks) -- don't need to clear vals as we work
   err_t e,ee; //ee for temp use in error handlers where we still need to return e
@@ -1307,6 +1361,12 @@ err_t vm_dowork(vm_t *vm) {
 
   //temp vars
   val_t t;
+#ifdef DEBUG_VAL
+  val64_t dbg; //debug val
+#ifdef DEBUG_VAL_EVAL
+  int debug_val_eval = vm->debug_val_eval; //whether we should eval debug val in place of regular val
+#endif
+#endif
   valstruct_t *v,*tv;
   val_t *p;
 
@@ -1326,8 +1386,13 @@ err_t vm_dowork(vm_t *vm) {
 #define STATE_1 do{state=1;}while(0)
 #define STATE_2 do{state=2;}while(0)
 
+#define SET_LOOP_RETURN do{_op_return=&&loop_return;}while(0)
+#define SET_CODE_RETURN do{_op_return=&&code_return;}while(0)
+#define SET_NOEVAL_RETURN do{_op_return=&&noeval_return;}while(0)
+
 //TODO: clean up naming convension for stack macros (reserve, fix, restore, ...)
 //TODO: more macros to clean up (and make safer) the low-level op handling code
+//TODO: consistent val access macros to be able to fully validate val create/destroy/replace and debug vals
 #define RESERVE do{ VM_TRY(_vm_reserve(stackval,&stackbase,&stack,&stackend)); }while(0)
 #define RESERVE_fatal do{ if ((e = _vm_reserve(stackval,&stackbase,&stack,&stackend))) E_FATAL(e); }while(0)
 #define WRESERVE do{ VM_TRY(_vm_reserve(workval,&workbase,&work,&workend)); }while(0)
@@ -1344,6 +1409,7 @@ err_t vm_dowork(vm_t *vm) {
 #define PUSH_0(x) do{ top=(x); state=1; }while(0)
 #define PUSH_1(x) do{ *(stack++)=top; top=(x); state=2; }while(0)
 #define PUSH_2(x) do{ if (stack==stackend) RESERVE; *(stack++)=top; top=(x); }while(0)
+#define PUSH_12(x) do{ if (stack==stackend) RESERVE; *(stack++)=top; top=(x); state=2; }while(0)
 #define PUSH_2_fatal(x) do{ if (stack==stackend) RESERVE_fatal; *(stack++)=top; top=(x); }while(0)
 #define PUSH(x) do{ switch(state) { case 0: PUSH_0(x); break; case 1: PUSH_1(x); break; default: PUSH_2(x); } }while(0)
 #define PUSH_fatal(x) do{ switch(state) { case 0: PUSH_0(x); break; case 1: PUSH_1(x); break; default: PUSH_2_fatal(x); } }while(0)
@@ -1420,10 +1486,10 @@ err_t vm_dowork(vm_t *vm) {
 //VM_DEBUG_STEP enables printing of every step of the VM
 #ifdef VM_DEBUG_STEP
 #define NEXT goto vm_debug_step
-#define NEXTW do{ _op_return=&&loop_return; goto vm_debug_step; }while(0)
+#define NEXTW do{ SET_LOOP_RETURN; goto vm_debug_step; }while(0)
 #else
 #define NEXT goto *_op_return
-#define NEXTW do{ _op_return=&&loop_return; goto loop_next; }while(0)
+#define NEXTW do{ SET_LOOP_RETURN; goto loop_next; }while(0)
 #endif
 
 //VM_try and VM_try_t assume an argument that returns an err_t; VM_TRY_t additionally makes sure t is destroyed
@@ -1444,6 +1510,7 @@ err_t vm_dowork(vm_t *vm) {
 #define E_MISSINGARGS do{ FIXSTACKS; vm_vstate(vm); e = _throw(ERR_MISSINGARGS); HANDLE_e; } while(0)
 #define E_UNDEFINED do{ e = _throw(ERR_UNDEFINED); HANDLE_e; } while(0)
 #define E_NOIMPL do{ e = _throw(ERR_NOT_IMPLEMENTED); HANDLE_e; } while(0)
+#define E_NODEBUG do{ e = _throw(ERR_NO_DEBUG); HANDLE_e; } while(0)
 //#define E_MALLOC do{ e = _throw(ERR_MALLOC); HANDLE_e; } while(0)
 #define E_FATAL(err) do{ e = _fatal(err); HANDLE_e; } while(0)
 #else
@@ -1455,6 +1522,7 @@ err_t vm_dowork(vm_t *vm) {
 #define E_MISSINGARGS goto err_missingargs
 #define E_UNDEFINED goto err_undefined
 #define E_NOIMPL goto err_noimpl
+#define E_NODEBUG goto err_nodebug
 //#define E_MALLOC goto err_malloc
 #define E_FATAL(err) do{ e = err; goto err_fatal; }while(0)
 #endif
@@ -1470,32 +1538,59 @@ err_t vm_dowork(vm_t *vm) {
   while(work != workbase) {
 loop_next:
     w = *(--work); //get next workitem and decrement work ptr (still need to destroy/clear *work as needed below)
-    VM_DEBUG_EVAL(w);
+    VM_DEBUG_EVAL(&w);
+#ifdef DEBUG_VAL_EVAL
+    // DEBUG_VAL_EVAL - non-null eval-type debug vals are evaluated in place of regular val
+    // - regular val is placed on top of stack, which allows for validation/transformation/logging before evaluating regular val (or not)
+    // - splits regular/debug vals (so regular val with no debug info attached is on top of stack)
+    if( debug_val_eval ) {
+      dbg = __val_dbg_val(w);
+      if (!val_is_null(dbg) && !val_ispush(dbg) ) { //replace w on workstack with debug val, push w (w/o debug) to stack
+        PUSH(__val_dbg_strip(w));
+        w = (val_t)dbg;
+        *(work++) = w;
+      }
+    }
+#endif
     switch(__val_tag(w)) {
-      case _OP_TAG:
+      case _OP_TAG: //this is an opcode (maybe native later for op > N_OPS / N_OPCODES) <================
         val_clear(work); //not actually needed for inline type
         GOTO_OP(w); //jump to opcode
-      case _STR_TAG:
+      case _STR_TAG: //this is a str-type - figure out if ident, string, or bytecode (eval ident,bytecode) <================
         v = __str_ptr(w);
         switch(v->type) {
-          case TYPE_IDENT:
-            if (_val_str_escaped(v)) { //escaped, unescape and move to stack
+          case TYPE_IDENT: //ident - unescape and push or eval from dictionary <====
+            if (_val_str_escaped(v)) { //escaped - unescape and push <==
               _val_str_unescape(v);
               PUSH(w);
               val_clear(work); //clear *work since we moved it to stack
-            } else { //need to eval
+            } else { //not escaped - eval from dictionary <==
               t = vm_dict_get(vm,v);
-              if (!val_is_null(t)) { //found def
+              if (!val_is_null(t)) { //found def <==
                 val_destroy(w);
                 if (val_is_op(t)) { //if op then we immediately jump to it
                   val_clear(work);
+#ifdef DEBUG_VAL_EVAL
+                  //in debug_val mode we need to check for debug val attached to op
+                  dbg = __val_dbg_val(t);
+                  if (debug_val_eval && !val_is_null(dbg) && !val_ispush(dbg)) {
+                    //need to clone debug val since it is in dict def
+                    PUSH(__val_dbg_strip(t));
+                    VM_TRY(val_clone(&t,dbg));
+                    WPUSH(t);
+                    NEXTW;
+                  } else {
+                    GOTO_OP(t);
+                  }
+#else
                   GOTO_OP(t);
+#endif
                 } else { //else we replace ident with definition on work stack
                   val_t def;
                   VM_TRY(val_clone(&def,t));
                   *(work++) = def; //replace *work with def
                 }
-              } else { //undefined
+              } else { //undefined - print error and throw undefined <====
                 fflush(stdout);
                 fprintf(stderr,"unknown word '%.*s'\n",_val_str_len(v),_val_str_begin(v)); //TODO: only when in terminal
                 //TODO: can we pass undefined word to exception handler???
@@ -1505,19 +1600,19 @@ loop_next:
               }
             }
             break;
-          case TYPE_BYTECODE:
+          case TYPE_BYTECODE: //bytecode - not implemented yet in this version <====
             E_NOIMPL;
-          default:
+          default: //string (or other str-based push types we add) - push it <====
             PUSH(w);
             val_clear(work); //clear *work since we moved it to stack
         }
         break;
-      case _LST_TAG:
+      case _LST_TAG: //this is a lst-type - figure out if code or list (eval code) <================
         v = __lst_ptr(w);
         switch(v->type) {
           case TYPE_CODE: //code val -- eval next val in w
             if (_val_lst_empty(v)) { val_destroy(*work); val_clear(work); NEXT; }
-            _op_return=&&code_return;
+            SET_CODE_RETURN;
             ++work; //undo the decrement we did above (if w not empty we keep it at top of stack)
 
             //TODO: reduce code duplication between code/stack handling if possible (or remove this todo)
@@ -1529,8 +1624,18 @@ code_return: //we keep looping here until w is empty or the work stack gets upda
             VM_TRY(_val_lst_lpop(v,&t));
             if (_val_lst_empty(v)) { //last el
               val_destroy(*(--work)); val_clear(work);
-              _op_return=&&loop_return;
+              SET_LOOP_RETURN;
             }
+#ifdef DEBUG_VAL_EVAL
+            //if debug_val_eval, we eval debug val in place of val (if debug val is not null/push-type)
+            if( debug_val_eval ) {
+              dbg = __val_dbg_val(t);
+              if (!val_is_null(dbg) && !val_ispush(dbg) ) { //replace w on workstack with debug val, push w (w/o debug) to stack
+                PUSH(__val_dbg_strip(t));
+                t = (val_t)dbg;
+              }
+            }
+#endif
             switch(__val_tag(t)) {
               case _OP_TAG:
                 GOTO_OP(t);
@@ -1546,7 +1651,21 @@ code_return: //we keep looping here until w is empty or the work stack gets upda
                       if (!val_is_null(t)) {
                         _val_str_destroy(tv);
                         if (val_is_op(t)) { //if op then we immediately jump to it
+#ifdef DEBUG_VAL_EVAL
+                          //in debug_val mode we need to check for debug val attached to op
+                          dbg = __val_dbg_val(t);
+                          if (debug_val_eval && !val_is_null(dbg) && !val_ispush(dbg)) {
+                            //need to clone debug val since it is in dict def
+                            PUSH(__val_dbg_strip(t));
+                            VM_TRY(val_clone(&t,dbg));
+                            WPUSH(t);
+                            NEXTW;
+                          } else {
+                            GOTO_OP(t);
+                          }
+#else
                           GOTO_OP(t);
+#endif
                         } else { //else we push definition onto work stack TODO: if push type, directly push to stack instead
                           VM_TRY(val_clone(&t,t));
                           WPUSH(t);
@@ -1625,7 +1744,7 @@ code_return: //we keep looping here until w is empty or the work stack gets upda
             val_clear(work); //clear *work since we moved it to stack
         }
         break;
-      case _VAL_TAG:
+      case _VAL_TAG: // this is a val-type - check valstruct type <================
         v = __val_ptr(w);
         switch(v->type) {
           case TYPE_FILE:
@@ -1664,10 +1783,10 @@ code_return: //we keep looping here until w is empty or the work stack gets upda
             PUSH(w);
         }
         break;
-      case _TAG5:
+      case _TAG5: // we don't use this type tage yet <================
         E_BADTYPE;
       //case _INT_TAG:
-      default: //double or int
+      default: //this is a double or int - push it <================
         val_clear(work); //not needed for inline type
         PUSH(w);
     }
@@ -1686,7 +1805,7 @@ loop_return:
   while(work != workbase) { //FIXME: validate correctly freeing/clearing/using wtop
 //noeval_next:
     w = *(--work); //get next workitem and decrement work ptr (still need to destroy/clear *work as needed below)
-    VM_DEBUG_EVAL(w);
+    VM_DEBUG_EVAL(&w);
     if (val_is_file(w)) {
       ++work; //undo the decrement we did above (file stays on wstack until empty)
       v = __file_ptr(w);
@@ -1766,6 +1885,10 @@ noeval_return:
 //the VM state on jumping to one of those labels will match the label suffix, so you can do (or skip) any necessary stack checks
 //  - can define multiple labels before the same code if the code is the same for those states
 
+
+  //TODO: full vaidation of debug val handling (that every op clones/copies/destroys debug val appropriately)
+
+
 op_NULL_0:
 op_NULL_1:
 op_NULL_2:
@@ -1797,8 +1920,7 @@ op_parsecode_2:
   tv = __str_ptr(_TOP_12);
   t = val_empty_code();
   VM_TRY_t(vm_parse_code(vm,_val_str_begin(tv),_val_str_len(tv),__lst_ptr(t)));
-  val_destroy(_TOP_12);
-  _TOP_12 = t;
+  __val_reset(&_TOP_12,t);
   NEXT;
 op_parsecode__0: STATE_0TO1;
 op_parsecode__1:
@@ -1807,8 +1929,7 @@ op_parsecode__2:
   tv = __str_ptr(_TOP_12);
   t = val_empty_code();
   VM_TRY_t(vm_parse_input(vm,_val_str_begin(tv),_val_str_len(tv),__lst_ptr(t)));
-  val_destroy(_TOP_12);
-  _TOP_12 = t;
+  __val_reset(&_TOP_12,t);
   NEXT;
 op_pop_0:
   POP_0;
@@ -1861,7 +1982,7 @@ op_dupn_0: STATE_0TO1;
 op_dupn_1:
 op_dupn_2:
   if (!val_is_int(_TOP_12)) E_BADARGS;
-  i = __val_int(_TOP_12);
+  i = __val_int(_TOP_12); __val_dbg_destroy(_TOP_2);
   if (i <= 0 || !HAVE(i)) E_BADARGS;
   //STATE_2;
 
@@ -1871,7 +1992,7 @@ op_dign_0: STATE_0TO1;
 op_dign_1:
 op_dign_2:
   if (!val_is_int(_TOP_12)||!HAVE(1+__val_int(_TOP_12))) E_BADARGS;
-  i = __val_int(_TOP_12);
+  i = __val_int(_TOP_12); __val_dbg_destroy(_TOP_2);
   _TOP_2 = stack[-i-1]; //dig out nth
   valmove(stack-i-1,stack-i,i); //shift vals left
   val_clear(--stack);
@@ -1881,7 +2002,7 @@ op_buryn_1:
 op_buryn_2:
   if (!val_is_int(_TOP_12)||!HAVE(1+__val_int(_TOP_12))) E_BADARGS;
   STATE_2;
-  i = __val_int(_TOP_2);
+  i = __val_int(_TOP_2); __val_dbg_destroy(_TOP_2);
   _TOP_2 = _THIRD_2; //save val getting shuffled to top by bury
   valmove(stack-i,stack-i-1,i-1); //shift vals right 1 to make space
   stack[-i-1] = _SECOND_2; //bury top
@@ -1891,7 +2012,7 @@ op_flipn_0: STATE_0TO1;
 op_flipn_1:
 op_flipn_2:
   if (!val_is_int(_TOP_12)||!HAVE(__val_int(_TOP_12))) E_BADARGS;
-  n = __val_int(_TOP_12);
+  n = __val_int(_TOP_12); __val_dbg_destroy(_TOP_12);
   for(i=0;i<n/2;++i) {
     val_swap(stack-1-i,stack-1-(n-i-1));
   }
@@ -1971,6 +2092,7 @@ op_lpush_2:
   } else if (val_is_str(_TOP_2)) {
     if (val_is_str(_SECOND_2)) {
       VM_TRY(_val_str_rcat(__str_ptr(_TOP_2),__str_ptr(_SECOND_2)));
+      __val_dbg_destroy(_SECOND_2); //destroy debug val for second (top retains)
       _POPD_2;
       NEXT;
     } else {
@@ -2035,6 +2157,11 @@ op_cat_2:
   if (val_is_lst(_SECOND_2)) {
     if (!val_is_lst(_TOP_2)) E_BADTYPE;
     VM_TRY(_val_lst_cat(__lst_ptr(_SECOND_2),__lst_ptr(_TOP_2)));
+
+    //need to destroy debug val of top (second keeps its debug val)
+    // NOTE: could do this up top, but this means on type err we don't destroy debug into
+    __val_dbg_destroy(_TOP_2);
+
     _TOP_2 = _SECOND_2;
     _POPD_2;
     NEXT;
@@ -2045,6 +2172,7 @@ op_cat_2:
       _TOP_2 = t;
     }
     VM_TRY(_val_str_cat(__str_ptr(_SECOND_2),__str_ptr(_TOP_2)));
+    __val_dbg_destroy(_TOP_2); //need to destroy debug val of top (second keeps its debug val)
     _TOP_2 = _SECOND_2;
     _POPD_2;
     NEXT;
@@ -2057,6 +2185,9 @@ op_rappend_2:
   if (val_is_lst(_TOP_2)) {
     if (val_is_lst(_SECOND_2)) {
       VM_TRY(_val_lst_cat(__lst_ptr(_TOP_2),__lst_ptr(_SECOND_2)));
+
+      //need to destroy debug val of second (for other list on top cases second added along with debug)
+      __val_dbg_destroy(_SECOND_2);
     } else {
       VM_TRY(_val_lst_rpush(__lst_ptr(_TOP_2),_SECOND_2));
     }
@@ -2069,6 +2200,10 @@ op_rappend_2:
       _TOP_2 = t;
     }
     VM_TRY(_val_str_cat(__str_ptr(_TOP_2),__str_ptr(_SECOND_2)));
+
+    //need to destroy debug val of second (string on top keeps its debug val)
+    __val_dbg_destroy(_SECOND_2);
+
     _POPD_2;
     NEXT;
   } else {
@@ -2079,7 +2214,7 @@ op_splitn_0: STATE_0TO1;
 op_splitn_1: STATE_1TO2;
 op_splitn_2:
   if (!val_is_int(_TOP_2)) E_BADTYPE;
-  i = __val_int(_TOP_2);
+  i = __val_int(_TOP_2); __val_dbg_destroy(_TOP_2);
   if (val_is_lst(_SECOND_2)) {
     if (i < 0 || (unsigned int)i > _val_lst_len(__lst_ptr(_SECOND_2))) E_BADARGS;
     VM_TRY(_val_lst_splitn(__lst_ptr(_SECOND_2),&_TOP_2,i));
@@ -2096,6 +2231,7 @@ op_strhash_0: STATE_0TO1;
 op_strhash_1:
 op_strhash_2:
   if (!val_is_str(_TOP_12)) E_BADTYPE;
+  __val_dbg_destroy(_TOP_12); //throw away debug val
   t = _val_str_hash32(__str_ptr(_TOP_12));
   val_destroy(_TOP_12);
   _TOP_12 = t;
@@ -2105,7 +2241,7 @@ op_getbyte_0: STATE_0TO1;
 op_getbyte_1: STATE_1TO2;
 op_getbyte_2:
   if (!val_is_str(_SECOND_2) || !val_is_int(_TOP_2)) E_BADTYPE;
-  i = __int_val(_TOP_2);
+  i = __int_val(_TOP_2); __val_dbg_destroy(_TOP_2); //throw away debug val from index
   tv = __str_ptr(_SECOND_2);
   if (i < 0 || (uint32_t)i >= _val_str_len(tv)) E_BADARGS;
   //NOTE: we skip destroying top, which is ok here because we know it is an int (with inline value)
@@ -2117,7 +2253,8 @@ op_setbyte_1:
 op_setbyte_2:
   if (!HAVE(2)) E_MISSINGARGS;
   if (!val_is_str(_THIRD_2) || !val_is_int(_SECOND_2) || !val_is_int(_TOP_2)) E_BADTYPE;
-  i = __int_val(_TOP_2);
+  i = __int_val(_TOP_2); __val_dbg_destroy(_TOP_2); //throw away debug val from index
+  __val_dbg_destroy(_SECOND_2); //throw away debug val from byte
   tv = __str_ptr(_THIRD_2);
   VM_TRY(_val_str_rreserve(tv,0));
   if (i < 0 || (uint32_t)i >= _val_str_len(tv)) E_BADARGS;
@@ -2161,7 +2298,7 @@ op_nth_0: STATE_0TO1;
 op_nth_1: STATE_1TO2;
 op_nth_2:
   if (!val_is_int(_TOP_2) || !val_is_lst(_SECOND_2)) E_BADARGS;
-  i = __val_int(_TOP_2);
+  i = __int_val(_TOP_2); __val_dbg_destroy(_TOP_2); //throw away debug val from index
   if ((i < 1 || (unsigned int)i > _val_lst_len(__lst_ptr(_SECOND_2)))) E_BADARGS;
 
   VM_TRY(val_lst_ith(&_SECOND_2,i-1));
@@ -2221,7 +2358,7 @@ op_dnth_0: STATE_0TO1;
 op_dnth_1: STATE_1TO2;
 op_dnth_2:
   if (!val_is_int(_TOP_2) || !val_is_lst(_SECOND_2)) E_BADARGS;
-  i = __val_int(_TOP_2);
+  i = __int_val(_TOP_2); __val_dbg_destroy(_TOP_2); //throw away debug val from index
   if ((i < 1 || (unsigned int)i > _val_lst_len(__lst_ptr(_SECOND_2)))) E_BADARGS;
   VM_TRY(val_clone(&_TOP_2, _val_lst_begin(__lst_ptr(_SECOND_2))[i-1]));
   NEXT;
@@ -2230,7 +2367,7 @@ op_swapnth_0: STATE_0TO1;
 op_swapnth_1:
 op_swapnth_2:
   if (!HAVE(2) || !val_is_int(_TOP_2) || !val_is_lst(_THIRD_2)) E_BADARGS;
-  i = __val_int(_TOP_2);
+  i = __int_val(_TOP_2); __val_dbg_destroy(_TOP_2); //throw away debug val from index
   tv = __lst_ptr(_THIRD_2);
   if ((i < 1 || (unsigned int)i > _val_lst_len(tv))) E_BADARGS;
   VM_TRY(_val_lst_deref(tv));
@@ -2243,7 +2380,7 @@ op_setnth_0: STATE_0TO1;
 op_setnth_1:
 op_setnth_2:
   if (!HAVE(2) || !val_is_int(_TOP_2) || !val_is_lst(_THIRD_2)) E_BADARGS;
-  i = __val_int(_TOP_2);
+  i = __int_val(_TOP_2); __val_dbg_destroy(_TOP_2); //throw away debug val from index
   tv = __lst_ptr(_THIRD_2);
   if ((i < 1 || (unsigned int)i > _val_lst_len(tv))) E_BADARGS;
   VM_TRY(_val_lst_deref(tv));
@@ -2268,9 +2405,10 @@ op_restore_0: STATE_0TO1;
 op_restore_1:
 op_restore_2:
   if (!val_is_lst(_TOP_12)) E_BADTYPE;
+  __val_dbg_destroy(_TOP_12); //throw away debug val from list
   STATE_0;
   FIXSTACK;
-  _val_lst_swap(__lst_ptr(top),stackval);
+  _val_lst_swap(__lst_ptr(_TOP_12),stackval);
   VM_TRY_t(_val_lst_cat(stackval,__lst_ptr(top)));
   RESTORESTACK;
   NEXT;
@@ -2279,6 +2417,7 @@ op_expand_0: STATE_0TO1;
 op_expand_1:
 op_expand_2:
   if (!val_is_lst(_TOP_12)) E_BADTYPE;
+  __val_dbg_destroy(_TOP_12); //throw away debug val from list
   STATE_0;
   FIXSTACK;
   VM_TRY_t(_val_lst_cat(stackval,__lst_ptr(top)));
@@ -2343,25 +2482,27 @@ op_add_0: STATE_0TO1;
 op_add_1: STATE_1TO2;
 op_add_2:
   //TODO: for type checking we can use the tag bits to create an integer we can effectiently get the case from (using e.g. switch)
+  //TODO: standardize debug val semantics for math ops (currently second (first arg pushed) retains)
   STATE_1;
+  __val_dbg_destroy(_TOP_2); //destroy dbg val of top (second retains)
   if (val_is_int(_TOP_2)) {
     if (val_is_int(_SECOND_2)) {
-      _TOP_2 = __int_val( __val_int(_SECOND_2) + __val_int(_TOP_2) );
-      stack--;
+      __val_set(&_SECOND_2, __int_val( __val_int(_SECOND_2) + __val_int(_TOP_2) ) );
+      _POP_2;
       NEXT;
     } else if (val_is_double(_SECOND_2)) {
-      _TOP_2 = __dbl_val( __val_dbl(_SECOND_2) + (double)__val_int(_TOP_2) );
-      stack--;
+      __val_set(&_SECOND_2,__dbl_val( __val_dbl(_SECOND_2) + (double)__val_int(_TOP_2) ));
+      _POP_2;
       NEXT;
     }
   } else if (val_is_double(_TOP_2)) {
     if (val_is_int(_SECOND_2)) {
-      _TOP_2 = __dbl_val( (double)__val_int(_SECOND_2) + __val_dbl(_TOP_2) );
-      stack--;
+      __val_set(&_SECOND_2,__dbl_val( (double)__val_int(_SECOND_2) + __val_dbl(_TOP_2) ));
+      _POP_2;
       NEXT;
     } else if (val_is_double(_SECOND_2)) {
-      _TOP_2 = __dbl_val( __val_dbl(_SECOND_2) + __val_dbl(_TOP_2) );
-      stack--;
+      __val_set(&_SECOND_2,__dbl_val( __val_dbl(_SECOND_2) + __val_dbl(_TOP_2) ));
+      _POP_2;
       NEXT;
     }
   }
@@ -2371,24 +2512,25 @@ op_sub_0: STATE_0TO1;
 op_sub_1: STATE_1TO2;
 op_sub_2:
   STATE_1;
+  __val_dbg_destroy(_TOP_2); //destroy dbg val of top (second retains)
   if (val_is_int(_TOP_2)) {
     if (val_is_int(_SECOND_2)) {
-      _TOP_2 = __int_val(__val_int(_SECOND_2) - __val_int(_TOP_2));
-      stack--;
+      __val_set(&_SECOND_2, __int_val( __val_int(_SECOND_2) - __val_int(_TOP_2) ) );
+      _POP_2;
       NEXT;
     } else if (val_is_double(_SECOND_2)) {
-      _TOP_2 = __dbl_val( __val_dbl(_SECOND_2) - (double)__val_int(_TOP_2) );
-      stack--;
+      __val_set(&_SECOND_2,__dbl_val( __val_dbl(_SECOND_2) - (double)__val_int(_TOP_2) ));
+      _POP_2;
       NEXT;
     }
   } else if (val_is_double(_TOP_2)) {
     if (val_is_int(_SECOND_2)) {
-      _TOP_2 = __dbl_val( (double)__val_int(_SECOND_2) - __val_dbl(_TOP_2) );
-      stack--;
+      __val_set(&_SECOND_2,__dbl_val( (double)__val_int(_SECOND_2) - __val_dbl(_TOP_2) ));
+      _POP_2;
       NEXT;
     } else if (val_is_double(_SECOND_2)) {
-      _TOP_2 = __dbl_val( __val_dbl(_SECOND_2) - __val_dbl(_TOP_2) );
-      stack--;
+      __val_set(&_SECOND_2,__dbl_val( __val_dbl(_SECOND_2) - __val_dbl(_TOP_2) ));
+      _POP_2;
       NEXT;
     }
   }
@@ -2398,24 +2540,25 @@ op_mul_0: STATE_0TO1;
 op_mul_1: STATE_1TO2;
 op_mul_2:
   STATE_1;
+  __val_dbg_destroy(_TOP_2); //destroy dbg val of top (second retains)
   if (val_is_int(_TOP_2)) {
     if (val_is_int(_SECOND_2)) {
-      _TOP_2 = __int_val(__val_int(_SECOND_2) * __val_int(_TOP_2));
-      stack--;
+      __val_set(&_SECOND_2, __int_val( __val_int(_SECOND_2) * __val_int(_TOP_2) ) );
+      _POP_2;
       NEXT;
     } else if (val_is_double(_SECOND_2)) {
-      _TOP_2 = __dbl_val( __val_dbl(_SECOND_2) * (double)__val_int(_TOP_2) );
-      stack--;
+      __val_set(&_SECOND_2,__dbl_val( __val_dbl(_SECOND_2) * (double)__val_int(_TOP_2) ));
+      _POP_2;
       NEXT;
     }
   } else if (val_is_double(_TOP_2)) {
     if (val_is_int(_SECOND_2)) {
-      _TOP_2 = __dbl_val( (double)__val_int(_SECOND_2) * __val_dbl(_TOP_2) );
-      stack--;
+      __val_set(&_SECOND_2,__dbl_val( (double)__val_int(_SECOND_2) * __val_dbl(_TOP_2) ));
+      _POP_2;
       NEXT;
     } else if (val_is_double(_SECOND_2)) {
-      _TOP_2 = __dbl_val( __val_dbl(_SECOND_2) * __val_dbl(_TOP_2) );
-      stack--;
+      __val_set(&_SECOND_2,__dbl_val( __val_dbl(_SECOND_2) * __val_dbl(_TOP_2) ));
+      _POP_2;
       NEXT;
     }
   }
@@ -2425,24 +2568,25 @@ op_div_0: STATE_0TO1;
 op_div_1: STATE_1TO2;
 op_div_2:
   STATE_1;
+  __val_dbg_destroy(_TOP_2); //destroy dbg val of top (second retains)
   if (val_is_int(_TOP_2)) {
     if (val_is_int(_SECOND_2)) {
-      _TOP_2 = __int_val(__val_int(_SECOND_2) / __val_int(_TOP_2));
-      stack--;
+      __val_set(&_SECOND_2, __int_val( __val_int(_SECOND_2) / __val_int(_TOP_2) ) );
+      _POP_2;
       NEXT;
     } else if (val_is_double(_SECOND_2)) {
-      _TOP_2 = __dbl_val( __val_dbl(_SECOND_2) / (double)__val_int(_TOP_2) );
-      stack--;
+      __val_set(&_SECOND_2,__dbl_val( __val_dbl(_SECOND_2) / (double)__val_int(_TOP_2) ));
+      _POP_2;
       NEXT;
     }
   } else if (val_is_double(_TOP_2)) {
     if (val_is_int(_SECOND_2)) {
-      _TOP_2 = __dbl_val( (double)__val_int(_SECOND_2) / __val_dbl(_TOP_2) );
-      stack--;
+      __val_set(&_SECOND_2,__dbl_val( (double)__val_int(_SECOND_2) / __val_dbl(_TOP_2) ));
+      _POP_2;
       NEXT;
     } else if (val_is_double(_SECOND_2)) {
-      _TOP_2 = __dbl_val( __val_dbl(_SECOND_2) / __val_dbl(_TOP_2) );
-      stack--;
+      __val_set(&_SECOND_2,__dbl_val( __val_dbl(_SECOND_2) / __val_dbl(_TOP_2) ));
+      _POP_2;
       NEXT;
     }
   }
@@ -2452,9 +2596,9 @@ op_inc_0: STATE_0TO1;
 op_inc_1:
 op_inc_2:
   if (val_is_int(_TOP_12)) {
-    _TOP_12 = __int_val( __val_int(_TOP_12) + 1);
+    ++*(int32_t*)(&_TOP_12);
   } else if (val_is_double(_TOP_12)) {
-    _TOP_12 = __dbl_val( __val_dbl(_TOP_12) + 1);
+    __val_set(&_TOP_12, __dbl_val(__val_dbl(_TOP_12) + 1));
   } else {
     E_BADTYPE;
   }
@@ -2464,9 +2608,9 @@ op_dec_0: STATE_0TO1;
 op_dec_1:
 op_dec_2:
   if (val_is_int(_TOP_12)) {
-    _TOP_12 = __int_val( __val_int(_TOP_12) - 1);
+    --*(int32_t*)(&_TOP_12);
   } else if (val_is_double(_TOP_12)) {
-    _TOP_12 = __dbl_val( __val_dbl(_TOP_12) - 1);
+    __val_set(&_TOP_12, __dbl_val(__val_dbl(_TOP_12) - 1));
   } else {
     E_BADTYPE;
   }
@@ -2476,9 +2620,9 @@ op_neg_0: STATE_0TO1;
 op_neg_1:
 op_neg_2:
   if (val_is_int(_TOP_12)) {
-    _TOP_12 = __int_val( -__val_int(_TOP_12));
+    *(int32_t*)(&_TOP_12) *= -1;
   } else if (val_is_double(_TOP_12)) {
-    _TOP_12 = __dbl_val( -__val_dbl(_TOP_12));
+    __val_set(&_TOP_12, __dbl_val(-__val_dbl(_TOP_12)));
   } else {
     E_BADTYPE;
   }
@@ -2490,14 +2634,13 @@ op_abs_2:
   if (val_is_int(_TOP_12)) {
     i = __val_int(_TOP_12);
     if (i<0) {
-      i *= -1;
-      _TOP_12 = __int_val(i);
+      *(int32_t*)(&_TOP_12) *= -1;
     }
   } else if (val_is_double(_TOP_12)) {
     f = __val_dbl(_TOP_12);
     if (f<0) {
       f *= -1;
-      _TOP_12 = __dbl_val(f);
+      __val_set(&_TOP_12, __dbl_val(f));
     }
   } else {
     E_BADTYPE;
@@ -2510,9 +2653,9 @@ op_sqrt_0: STATE_0TO1;
 op_sqrt_1:
 op_sqrt_2:
   if (val_is_int(_TOP_12)) {
-    _TOP_12 = __int_val( (int)sqrt( (double)__val_int(_TOP_12) ) );
+    __val_set(&_TOP_12, __int_val( (int)sqrt( (double)__val_int(_TOP_12) ) ));
   } else if (val_is_double(_TOP_12)) {
-    _TOP_12 = __dbl_val(sqrt(__val_dbl(_TOP_12)));
+    __val_set(&_TOP_12, __dbl_val(sqrt(__val_dbl(_TOP_12))));
   } else {
     E_BADTYPE;
   }
@@ -2522,9 +2665,9 @@ op_log_0: STATE_0TO1;
 op_log_1:
 op_log_2:
   if (val_is_int(_TOP_12)) {
-    _TOP_12 = __int_val( (int)log( (double)__val_int(_TOP_12) ) );
+    __val_set(&_TOP_12, __int_val( (int)log( (double)__val_int(_TOP_12) ) ));
   } else if (val_is_double(_TOP_12)) {
-    _TOP_12 = __dbl_val(log(__val_dbl(_TOP_12)));
+    __val_set(&_TOP_12, __dbl_val(log(__val_dbl(_TOP_12))));
   } else {
     E_BADTYPE;
   }
@@ -2534,24 +2677,25 @@ op_pow_0: STATE_0TO1;
 op_pow_1: STATE_1TO2;
 op_pow_2:
   STATE_1; //after add only top is guaranteed
+  __val_dbg_destroy(_TOP_2); //destroy dbg val of top (second retains)
   if (val_is_int(_TOP_2)) {
     if (val_is_int(_SECOND_2)) {
-      _TOP_2 = __dbl_val(pow((double)__val_int(_SECOND_2),(double)__val_int(_TOP_2)));
-      stack--;
+      __val_set(&_SECOND_2, __dbl_val(pow((double)__val_int(_SECOND_2),(double)__val_int(_TOP_2))));
+      _POP_2;
       NEXT;
     } else if (val_is_double(_SECOND_2)) {
-      _TOP_2 = __dbl_val( pow( __val_dbl(_SECOND_2),(double)__val_int(_TOP_2) ) );
-      stack--;
+      __val_set(&_SECOND_2, __dbl_val( pow( __val_dbl(_SECOND_2),(double)__val_int(_TOP_2) ) ));
+      _POP_2;
       NEXT;
     }
   } else if (val_is_double(_TOP_2)) {
     if (val_is_int(_SECOND_2)) {
-      _TOP_2 = __dbl_val( pow( (double)__val_int(_SECOND_2), __val_dbl(_TOP_2) ) );
-      stack--;
+      __val_set(&_SECOND_2, __dbl_val( pow( (double)__val_int(_SECOND_2), __val_dbl(_TOP_2) ) ));
+      _POP_2;
       NEXT;
     } else if (val_is_double(_SECOND_2)) {
-      _TOP_2 = __dbl_val( pow( __val_dbl(_SECOND_2), __val_dbl(_TOP_2) ) );
-      stack--;
+      __val_set(&_SECOND_2, __dbl_val( pow( __val_dbl(_SECOND_2), __val_dbl(_TOP_2) ) ));
+      _POP_2;
       NEXT;
     }
   }
@@ -2561,36 +2705,57 @@ op_mod_0: STATE_0TO1;
 op_mod_1: STATE_1TO2;
 op_mod_2:
   if (!val_is_int(_TOP_2) || !val_is_int(_SECOND_2)) E_BADTYPE;
-  _TOP_12 = __int_val(__val_int(_SECOND_2) % __val_int(_TOP_2));
-  _POPD_2;
+  __val_dbg_destroy(_TOP_2);
+  __val_set(&_SECOND_2, __int_val(__val_int(_SECOND_2) % __val_int(_TOP_2)));
+  _POP_2;
   NEXT;
 
 op_bit_and_0: STATE_0TO1;
 op_bit_and_1: STATE_1TO2;
 op_bit_and_2:
   if (!val_is_int(_TOP_2) || !val_is_int(_SECOND_2)) E_BADTYPE;
-  _TOP_12 = __int_val(__val_int(_SECOND_2) & __val_int(_TOP_2));
-  _POPD_2;
+  __val_dbg_destroy(_TOP_2);
+  __val_set(&_SECOND_2, __int_val(__val_int(_SECOND_2) & __val_int(_TOP_2)));
+  _POP_2;
   NEXT;
 op_bit_or_0: STATE_0TO1;
 op_bit_or_1: STATE_1TO2;
 op_bit_or_2:
   if (!val_is_int(_TOP_2) || !val_is_int(_SECOND_2)) E_BADTYPE;
-  _TOP_12 = __int_val(__val_int(_SECOND_2) | __val_int(_TOP_2));
-  _POPD_2;
+  __val_dbg_destroy(_TOP_2);
+  __val_set(&_SECOND_2, __int_val(__val_int(_SECOND_2) | __val_int(_TOP_2)));
+  _POP_2;
   NEXT;
 op_bit_xor_0: STATE_0TO1;
 op_bit_xor_1: STATE_1TO2;
 op_bit_xor_2:
   if (!val_is_int(_TOP_2) || !val_is_int(_SECOND_2)) E_BADTYPE;
-  _TOP_12 = __int_val(__val_int(_SECOND_2) ^ __val_int(_TOP_2));
-  _POPD_2;
+  __val_dbg_destroy(_TOP_2);
+  __val_set(&_TOP_12, __int_val(__val_int(_SECOND_2) ^ __val_int(_TOP_2)));
+  _POP_2;
   NEXT;
 op_bit_not_0: STATE_0TO1;
 op_bit_not_1:
 op_bit_not_2:
   if (!val_is_int(_TOP_12)) E_BADTYPE;
-  _TOP_12 = __int_val( ~__val_int(_TOP_12));
+  __val_set(&_TOP_12, __int_val( ~__val_int(_TOP_12)));
+  NEXT;
+
+op_bit_lshift_0: STATE_0TO1;
+op_bit_lshift_1: STATE_1TO2;
+op_bit_lshift_2:
+  if (!val_is_int(_TOP_2) || !val_is_int(_SECOND_2)) E_BADTYPE;
+  __val_dbg_destroy(_TOP_2);
+  __val_set(&_SECOND_2, __int_val(__val_int(_SECOND_2) << __val_int(_TOP_2)));
+  _POP_2;
+  NEXT;
+op_bit_rshift_0: STATE_0TO1;
+op_bit_rshift_1: STATE_1TO2;
+op_bit_rshift_2:
+  if (!val_is_int(_TOP_2) || !val_is_int(_SECOND_2)) E_BADTYPE;
+  __val_dbg_destroy(_TOP_2);
+  __val_set(&_SECOND_2, __int_val(__val_int(_SECOND_2) >> __val_int(_TOP_2)));
+  _POP_2;
   NEXT;
 
 op_lt_0: STATE_0TO1;
@@ -2710,11 +2875,8 @@ op_and__0: STATE_0TO1;
 op_and__1: STATE_1TO2;
 op_and__2:
   t = __int_val(0!=val_as_bool(_SECOND_2) && 0!=val_as_bool(_TOP_2));
-  val_destroy(*(--stack));
-  val_clear(stack);
-  val_destroy(_TOP_2);
-  _TOP_2 = t;
-  STATE_1;
+  __val_reset(&_SECOND_2, t);
+  POP_2;
   NEXT;
 
 op_or_0: STATE_0TO1;
@@ -2747,11 +2909,8 @@ op_or__0: STATE_0TO1;
 op_or__1: STATE_1TO2;
 op_or__2:
   t = __int_val(0!=val_as_bool(_SECOND_2) || 0!=val_as_bool(_TOP_2));
-  val_destroy(*(--stack));
-  val_clear(stack);
-  val_destroy(_TOP_2);
-  _TOP_2 = t;
-  STATE_1;
+  __val_reset(&_SECOND_2, t);
+  POP_2;
   NEXT;
 
 op_find_0: STATE_0TO1;
@@ -2759,8 +2918,7 @@ op_find_1: STATE_1TO2;
 op_find_2:
   if (!val_is_str(_TOP_2) || !val_is_str(_SECOND_2)) E_BADTYPE;
   t = __int_val(_val_str_findstr(__str_ptr(_SECOND_2),__str_ptr(_TOP_2)));
-  val_destroy(_TOP_2);
-  _TOP_2 = t;
+  __val_reset(&_TOP_2,t); //preserves debug val from search string on index (list debug val destroyed)
   POPD_2;
   NEXT;
 
@@ -2769,15 +2927,15 @@ op_parsenum_1:
 op_parsenum_2: 
   if (!val_is_str(_TOP_12)) E_BADTYPE;
   VM_TRY(val_num_parse(&t,_val_str_begin(__str_ptr(_TOP_12)),_val_str_len(__str_ptr(_TOP_12))));
-  val_destroy(_TOP_12);
-  _TOP_12 = t;
+  __val_reset(&_TOP_12,t); //preserve debug val from string
   NEXT;
 
 op_toint_0: STATE_0TO1;
 op_toint_1: 
 op_toint_2: 
   if (val_is_double(_TOP_12)) {
-    _TOP_12 = __int_val((int32_t)__val_dbl(_TOP_12));
+    t = __int_val((int32_t)__val_dbl(_TOP_12));
+    __val_reset(&_TOP_12,t);
   } else if (!val_is_int(_TOP_12)) {
     E_BADTYPE;
   }
@@ -2787,7 +2945,8 @@ op_tofloat_0: STATE_0TO1;
 op_tofloat_1: 
 op_tofloat_2: 
   if (val_is_int(_TOP_12)) {
-    _TOP_12 = __dbl_val((double)__val_int(_TOP_12));
+    t = __dbl_val((double)__val_int(_TOP_12));
+    __val_reset(&_TOP_12,t);
   } else if (!val_is_double(_TOP_12)) {
     E_BADTYPE;
   }
@@ -2798,8 +2957,7 @@ op_tostring_1:
 op_tostring_2: 
   if (!val_is_str(_TOP_12)) {
     VM_TRY(val_tostring(&t,_TOP_12));
-    val_destroy(_TOP_12);
-    _TOP_12 = t;
+    __val_reset(&_TOP_12,t);
   }
   __str_ptr(_TOP_12)->type = TYPE_STRING;
   NEXT;
@@ -2809,8 +2967,7 @@ op_toident_1:
 op_toident_2: 
   if (!val_is_str(_TOP_12)) {
     VM_TRY(val_tostring(&t,_TOP_12));
-    val_destroy(_TOP_12);
-    _TOP_12 = t;
+    __val_reset(&_TOP_12,t);
   }
   __str_ptr(_TOP_12)->type = TYPE_IDENT;
   NEXT;
@@ -2821,6 +2978,8 @@ op_substr_2:
   if (!HAVE(2)) E_EMPTY;
   if (!val_is_str(_THIRD_2) || !val_is_int(_SECOND_2) || !val_is_int(_TOP_2)) E_BADTYPE;
   _val_str_substr(__str_ptr(_THIRD_2),__val_int(_SECOND_2),__val_int(_TOP_2));
+  __val_dbg_destroy(_SECOND_2); //don't need actual destroy since just int
+  __val_dbg_destroy(_TOP_2);
   top = _THIRD_2;
   val_clear(--stack);
   val_clear(--stack);
@@ -2834,6 +2993,7 @@ op_trim_2:
   _val_str_trim(__str_ptr(_TOP_12));
   NEXT;
 
+  //TODO: a bunch of typecheck ops, or a few generic ones and builtins
 op_isnum_0: STATE_0TO1;
 op_isnum_1: 
 op_isnum_2: 
@@ -2967,7 +3127,7 @@ op_dipn_0: STATE_0TO1;
 op_dipn_1: STATE_1TO2;
 op_dipn_2:
   if (!val_is_int(_TOP_2) || !HAVE(1+__val_int(_TOP_2))) E_BADARGS;
-  i = __val_int(_TOP_2);
+  i = __val_int(_TOP_2); __val_dbg_destroy(_TOP_2);
   VM_TRY(val_list_wrap_arr(&t,stack-i-1,i));
   WPUSH3(__op_val(OP_expand),t,_SECOND_2);
   val_clear(&_SECOND_2);
@@ -3069,7 +3229,7 @@ op_napply_0: STATE_0TO1;
 op_napply_1: STATE_1TO2;
 op_napply_2:
   if (!val_is_int(top) || !HAVE(__val_int(top))) E_EMPTY;
-  i = __val_int(top);
+  i = __val_int(top); __val_dbg_destroy(_TOP_2);
   top = *(--stack); val_clear(stack);
   STATE_0;
   FIXSTACK;
@@ -3219,7 +3379,7 @@ op_printf_1:
 op_printf_2:
   if (!val_is_str(_TOP_12)) E_BADTYPE;
   STATE_0;
-  FIXSTACK;
+  FIXSTACK; //fixes stack (without top, so we still need to destroy after)
   e = val_printfv(__str_ptr(top), vm->open_list,1);
   RESTORESTACK;
   val_destroy(top);
@@ -3231,7 +3391,7 @@ op_fprintf_2:
   if (!val_is_str(_TOP_2) || !val_is_file(_SECOND_2)) E_BADTYPE;
   t = _SECOND_2; val_clear(--stack);
   STATE_0;
-  FIXSTACK;
+  FIXSTACK; //fixes stack (without top, so we still need to destroy after)
   e = val_fprintfv(_val_file_f(__file_ptr(t)),__str_ptr(top), vm->open_list,1, vm->open_list,1);
   RESTORESTACK;
   val_destroy(top);
@@ -3243,10 +3403,12 @@ op_sprintf_1:
 op_sprintf_2:
   if (!val_is_str(_TOP_12)) E_BADTYPE;
   STATE_0;
-  FIXSTACK;
+  FIXSTACK; //fixes stack (without top, so we still need to destroy after)
   t = val_empty_string();
   e = val_sprintfv(__str_ptr(t),__str_ptr(top), vm->open_list,1, vm->open_list,1);
+  //_val_lst_cleanderef(vm->open_list);
   RESTORESTACK;
+  RESERVE;
   val_destroy(top);
   top = t; STATE_1; //move buf string to top of stack
   if (0>e) HANDLE_e;
@@ -3281,8 +3443,7 @@ op_sprintlf_2:
   if (0>e) {
     HANDLE_e;
   } else {
-    val_destroy(_TOP_2);
-    _TOP_2 = t;
+    __val_reset(&_TOP_2,t);
   }
   NEXT;
 op_printlf2_0: STATE_0TO1;
@@ -3311,8 +3472,7 @@ op_sprintlf2_2:
   if (0>e) {
     HANDLE_e;
   } else {
-    val_destroy(_TOP_2);
-    _TOP_2 = t;
+    __val_reset(&_TOP_2, t);
   }
   NEXT;
 op_clear_0:
@@ -3320,7 +3480,7 @@ op_clear_1:
 op_clear_2:
   FIXSTACK;
   _val_lst_clear(stackval);
-  RESTORESTACK;
+  RESTORESTACK; //will automatically alloc initial stack space
   NEXT;
 op_qstate_0:
 op_qstate_1:
@@ -3362,7 +3522,8 @@ op_getdef_2:
 op_def_0: STATE_0TO1;
 op_def_1: STATE_1TO2;
 op_def_2:
-  if (!val_is_str(_TOP_12)) E_BADARGS;
+  if (!val_is_str(_TOP_2)) E_BADARGS;
+  __val_dbg_destroy(_TOP_2); //dict doesn't keep debug val for key
   if (0>(e = vm_dict_put(vm,__str_ptr(_TOP_2),_SECOND_2))) HANDLE_e;
   val_clear(--stack);
   STATE_0;
@@ -3370,7 +3531,7 @@ op_def_2:
 op_mapdef_0: STATE_0TO1;
 op_mapdef_1: STATE_1TO2;
 op_mapdef_2:
-  if (!val_is_str(_TOP_12)) E_BADARGS;
+  if (!val_is_str(_TOP_2)) E_BADARGS;
   val_clear(&t);
   VM_TRY(_val_dict_swap(&vm->dict,__str_ptr(_TOP_2),&t));
   WPUSH(__op_val(OP_def));
@@ -3436,21 +3597,31 @@ op_usescope__2:
   WPUSH2(__op_val(OP__endscope),_TOP_2);
   STATE_0;
   NEXTW;
-op_hhas_0: STATE_0TO1;
-op_hhas_1: STATE_1TO2;
-op_hhas_2:
+op_dict_has_0: STATE_0TO1;
+op_dict_has_1: STATE_1TO2;
+op_dict_has_2:
   if (!val_is_str(_TOP_2) || !val_is_dict(_SECOND_2)) E_BADARGS;
+  __val_dbg_destroy(_TOP_2); //drop debug val from key string
   t = __int_val(val_is_null(_val_dict_get(__dict_ptr(_SECOND_2),__str_ptr(_TOP_2))) ? 0 : 1);
   val_destroy(_TOP_2);
   _TOP_2 = t;
   NEXT;
-op_hget_0: STATE_0TO1;
-op_hget_1: STATE_1TO2;
-op_hget_2:
+op_dict_get_0: STATE_0TO1;
+op_dict_get_1: STATE_1TO2;
+op_dict_get_2:
   if (!val_is_str(_TOP_2) || !val_is_dict(_SECOND_2)) E_BADARGS;
+  __val_dbg_destroy(_TOP_2); //drop debug val from key string
   if (val_is_null(t = _val_dict_get(__dict_ptr(_SECOND_2),__str_ptr(_TOP_2)))) E_UNDEFINED;
   val_destroy(_TOP_2);
   VM_TRY(val_clone(&_TOP_2,t));
+  NEXT;
+op_dict_put_0: STATE_0TO1;
+op_dict_put_1:
+op_dict_put_2:
+  if (!HAVE(2) || !val_is_str(_TOP_2) || !val_is_dict(_THIRD_2)) E_BADARGS;
+  __val_dbg_destroy(_TOP_2); //drop debug val from key string
+  if (0>(e = _val_dict_put(__dict_ptr(_THIRD_2),__str_ptr(_TOP_2),_SECOND_2))) HANDLE_e; e=0;
+  _POP2_2;
   NEXT;
 
 op_open_0: STATE_0TO1;
@@ -3468,14 +3639,13 @@ op_open_2:
 op_close_0: STATE_0TO1;
 op_close_1:
 op_close_2:
-  if (!val_is_file(_TOP_12)) E_BADARGS;
-  VM_TRY(_val_file_close(__file_ptr(_TOP_12)));
-  t = val_empty_string();
-  if (0>(n = _val_file_readline(__file_ptr(_TOP_12),__str_ptr(t)))) {
-    val_destroy(t);
-    t = __int_val(n);
+  if (val_is_file(_TOP_12)) {
+    VM_TRY(_val_file_close(__file_ptr(_TOP_12)));
+  } else if (val_is_fd(_TOP_12)) {
+    VM_TRY(_val_fd_close(__fd_ptr(_TOP_12)));
+  } else {
+    E_BADARGS;
   }
-  PUSH(t);
   NEXT;
 
 op_readline_0: STATE_0TO1;
@@ -3521,7 +3691,7 @@ op_read_2:
     E_BADARGS;
   }
 
-  _TOP_2 = t; //can skip destroy since just an inline int
+  __val_set(&_TOP_2, t); //can skip destroy since just an inline int
   NEXT;
 
 op_write_0: STATE_0TO1;
@@ -3529,9 +3699,9 @@ op_write_1: STATE_1TO2;
 op_write_2:
   if (!val_is_string(_TOP_2)) E_BADARGS;
   if (val_is_file(_SECOND_2)) {
-    if (0>(n = _val_file_write(__file_ptr(_SECOND_2),__str_ptr(_TOP_2)))) HANDLE_e;
+    VM_TRY(_val_file_write(__file_ptr(_SECOND_2),__str_ptr(_TOP_2)));
   } else if (val_is_fd(_SECOND_2)) {
-    if (0>(n = _val_fd_write(__fd_ptr(_SECOND_2),__str_ptr(_TOP_2)))) HANDLE_e;
+    VM_TRY(_val_fd_write(__fd_ptr(_SECOND_2),__str_ptr(_TOP_2)));
   } else {
     E_BADARGS;
   }
@@ -3541,18 +3711,29 @@ op_write_2:
 op_seek_0: STATE_0TO1;
 op_seek_1: STATE_1TO2;
 op_seek_2:
-  if (!val_is_file(_SECOND_2) || !val_is_int(_TOP_2)) E_BADARGS;
-  if (0>(n = _val_file_seek(__file_ptr(_SECOND_2),__val_int(_TOP_2),SEEK_SET))) {
-    val_destroy(t);
-    t = __int_val(n);
+  if (!val_is_int(_TOP_2)) E_BADARGS;
+  i = __val_int(_TOP_2); __val_dbg_destroy(_TOP_2);
+  _POP_2; //top is int so we don't need to destroy
+
+  if (val_is_file(_TOP_1)) {
+    if (0>(e = _val_file_seek(__file_ptr(_TOP_1),i,SEEK_SET))) HANDLE_e;
+  } else if(val_is_fd(_TOP_1)) {
+    if (0>(e = _val_fd_seek(__fd_ptr(_TOP_1),i,SEEK_SET))) HANDLE_e;
+  } else {
+    E_BADARGS;
   }
   NEXT;
 
 op_fpos_0: STATE_0TO1;
 op_fpos_1:
 op_fpos_2:
-  if (!val_is_file(_TOP_12)) E_BADARGS;
-  PUSH(__int_val(_val_file_pos(__file_ptr(_TOP_12))));
+  if (val_is_file(_SECOND_2)) {
+    PUSH(__int_val(_val_file_pos(__file_ptr(_TOP_12))));
+  } else if(val_is_fd(_SECOND_2)) {
+    PUSH(__int_val(_val_fd_pos(__fd_ptr(_TOP_12))));
+  } else {
+    E_BADARGS;
+  }
   NEXT;
 
   //FIXME: validate full error checking and error recovery/cleanup for ref ops
@@ -3803,7 +3984,7 @@ op_sigwaitwhile__2:
 
   NEXTW;
 
-op_wait_0: STATE_0TO1;
+op_wait_0: STATE_0TO1; //TODO: IMPLEMENTME (or remove -- we don't directly use these at language level)
 op_wait_1:
 op_wait_2:
   E_NOIMPL;
@@ -3820,18 +4001,21 @@ op_vm_0: STATE_0TO1;
 op_vm_1: STATE_1TO2;
 op_vm_2:
   if (!val_is_lst(_TOP_2) || !val_is_lst(_SECOND_2)) E_BADTYPE;
+  __val_dbg_destroy(_SECOND_2); //vm keeps debug val of work stack (top), drops second debug val
+
   //VM_TRY(val_vm_init2(&t,__lst_ptr(_SECOND_2),__lst_ptr(_TOP_2))); //TODO: do we copy dict to child vm???
   //  - if we don't copy dict, then default init child dict (could pass scope/dict val to child as needed)
   //FIXME: make dict is threadsafe (either do deep clone, or don't copy over, or something)
   VM_TRY(_val_dict_clone(&t,&vm->dict));
   VM_TRY_t(val_vm_init3(&t,__lst_ptr(_SECOND_2),__lst_ptr(_TOP_2),__dict_ptr(t)));
-  _TOP_2 = t;
+  __val_set(&_TOP_2, t); //replace top val with vm (retains old top debug)
   _POPD_2;
   NEXT;
 op_thread_0: STATE_0TO1;
 op_thread_1: STATE_1TO2;
 op_thread_2:
   if (!val_is_lst(_TOP_2) || !val_is_lst(_SECOND_2)) E_BADTYPE;
+  __val_dbg_destroy(_SECOND_2); //vm keeps debug val of work stack (top), drops second debug val
   //FIXME: make dict is threadsafe (either do deep clone, or don't copy over, or something)
   //  - see op_vm above
   VM_TRY(_val_dict_clone(&t,&vm->dict));
@@ -3840,7 +4024,7 @@ op_thread_2:
   tv = __vm_ptr(t);
   VM_TRY(_val_lst_deref(&tv->v.vm->stack));
   VM_TRY(_val_lst_deref(&tv->v.vm->work));
-  _TOP_2 = t;
+  __val_set(&_TOP_2, t); //replace top val with vm (retains old top debug)
   _POPD_2;
   VM_TRY(_val_vm_runthread(__vm_ptr(t)));
   NEXT;
@@ -3901,6 +4085,7 @@ op_vm_setstack_0: STATE_0TO1;
 op_vm_setstack_1: STATE_1TO2;
 op_vm_setstack_2:
   if (!val_is_vm(_SECOND_2) || !val_is_lst(_TOP_2)) E_BADTYPE;
+  __val_dbg_destroy(_TOP_2); //lost since vm stack is direct valstruct pointer
   d = __vm_ptr(_SECOND_2)->v.vm;
   tv = __lst_ptr(_TOP_2);
   _val_lst_destroy_(&d->stack);
@@ -3910,6 +4095,7 @@ op_vm_wsetstack_0: STATE_0TO1;
 op_vm_wsetstack_1: STATE_1TO2;
 op_vm_wsetstack_2:
   if (!val_is_vm(_SECOND_2) || !val_is_lst(_TOP_2)) E_BADTYPE;
+  __val_dbg_destroy(_TOP_2); //lost since vm stack is direct valstruct pointer
   d = __vm_ptr(_SECOND_2)->v.vm;
   tv = __lst_ptr(_TOP_2);
   _val_lst_destroy_(&d->work);
@@ -4017,7 +4203,7 @@ op_perror_0: STATE_0TO1;
 op_perror_1:
 op_perror_2:
   VM_TRY(errval_fprintf(stdout,top));
-  _POP_12;
+  POP_12;
   NEXT;
 
 op_open_code_0:
@@ -4025,7 +4211,7 @@ op_open_code_1:
 op_open_code_2:
   FIXSTACKS;
   VM_TRY(_vm_open_code(vm));
-  _op_return = &&noeval_return;
+  SET_NOEVAL_RETURN;
   NEXT;
 //TODO: special handling for () and [] (so we don't need to allocate space for the empty lists)
 op_open_list_0:
@@ -4064,6 +4250,73 @@ op_quit_2:
   exit(0); //TODO: or return???
 
 //
+//debug ops follow quit
+//
+op_debug_eval_0:
+op_debug_eval_1:
+op_debug_eval_2:
+#ifdef DEBUG_VAL_EVAL
+  vm->debug_val_eval = 1;
+  debug_val_eval = 1;
+#else
+  E_NODEBUG;
+#endif
+  NEXT;
+
+op_debug_noeval_0:
+op_debug_noeval_1:
+op_debug_noeval_2:
+#ifdef DEBUG_VAL_EVAL
+  vm->debug_val_eval = 0;
+  debug_val_eval = 0;
+#else
+  E_NODEBUG;
+#endif
+  NEXT;
+
+op_debug_set_0: STATE_0TO1;
+op_debug_set_1: STATE_1TO2;
+op_debug_set_2:
+#ifdef DEBUG_VAL
+  //set debug val on second to top (destroy debug val on top/second)
+  __val_dbg_destroy(_TOP_2);
+  __val_dbg_destroy(_SECOND_2);
+  __val_dbg_val(_SECOND_2) = (val64_t)_TOP_2;
+  _POP_2;
+#else
+  //POP_2;
+  E_NODEBUG;
+#endif
+  NEXT;
+
+op_debug_get_0: STATE_0TO1;
+op_debug_get_1:
+op_debug_get_2:
+#ifdef DEBUG_VAL
+  dbg = (val_t)__val_dbg_val(_TOP_12);
+  _TOP_12 = __val_dbg_strip(_TOP_12);
+  PUSH_12(dbg);
+#else
+  //PUSH_12(NULL);
+  E_NODEBUG;
+#endif
+  NEXT;
+
+  //ifdebug prob doesn't need to be a core opcode -- TODO: maybe we need some general config/features opcodes?
+op_ifdebug_0: STATE_0TO1;
+op_ifdebug_1:
+op_ifdebug_2:
+#ifdef DEBUG_VAL
+  WPUSH(_TOP_12);
+  _POP_12;
+  NEXTW;
+#else
+  POP_12;
+#endif
+  NEXT;
+
+
+//
 //platform natives below here
 //
 
@@ -4078,6 +4331,13 @@ op_socket_0:
 op_socket_1:
 op_socket_2:
   VM_TRY(val_fd_init_socket(&t,AF_INET,SOCK_STREAM,0));
+  PUSH(t);
+  NEXT;
+
+op_socket_dgram_0:
+op_socket_dgram_1:
+op_socket_dgram_2:
+  VM_TRY(val_fd_init_socket(&t,AF_INET,SOCK_DGRAM,0));
   PUSH(t);
   NEXT;
 
@@ -4119,13 +4379,25 @@ op_socket_connect_2:
   POP2_2;
   NEXT;
 
+op_effects_0: STATE_0TO1;
+op_effects_1:
+op_effects_2:
+  // effects is the core to build static analysis tools from (incl. validating stack/stack-effect comments)
+  //
+  if (!val_is_op(_TOP_12)) E_BADTYPE;
+  i = __val_op(_TOP_12);
+  //val_destroy(&_TOP_12) //NOTE: not needed since just opcode (except for debugging)
+  VM_TRY(val_string_init_cstr(&_TOP_12, op_effects[i], strlen(op_effects[i])));
+  NEXT;
+
+
 handle_err_t:
   val_destroy(t);
   HANDLE_e;
 
   return _fatal(ERR_FATAL); //should never get here
 
-//if we don't care what line of C code the sxception came from, we add a label to jump to that sets the exception there
+//if we don't care what line of C code the exception came from, we add a label to jump to that sets the exception there
 #ifndef VM_DEBUG_ERR
 err_null: e = _throw(ERR_NULL); HANDLE_e;
 err_empty: e = _throw(ERR_EMPTY); HANDLE_e;
@@ -4135,6 +4407,7 @@ err_badargs: e = _throw(ERR_BADARGS); HANDLE_e;
 err_missingargs: e = _throw(ERR_MISSINGARGS); HANDLE_e;
 err_undefined: e = _throw(ERR_UNDEFINED); HANDLE_e;
 err_noimpl: e = _throw(ERR_NOT_IMPLEMENTED); HANDLE_e;
+err_nodebug: e = _throw(ERR_NO_DEBUG); HANDLE_e;
 //err_malloc: e = _throw(ERR_MALLOC); HANDLE_e;
 err_fatal: e = _fatal(e); HANDLE_e;
 #endif
@@ -4166,23 +4439,18 @@ handle_err:
 vm_debug_step: //print some debug state before each vm step
   //QSTATE;
   VSTATE;
-  switch(_op_return) {
-    case &&loop_return:
-      if (work != workbase) {
-        val_fprintf(stdout,"VM_STEP(w%d): %V\n",__int_val(state),work[-1]);
-      }
-      break;
-    case &&code_return:
-      val_fprintf(stdout,"VM_STEP(c%d): %V\n",__int_val(state),*_val_lst_begin(v));
-      break;
-    case &&noeval_return:
-      if (work != workbase) {
-        val_fprintf(stdout,"VM_STEP(n%d): %V\n",__int_val(state),work[-1]);
-      }
-      break;
-    default:
-      fprintf(stdout,"VM_STEP: Invalid VM op return\n");
-      break;
+  if (_op_return == &&loop_return) {
+    if (work != workbase) {
+      val_fprintf(stdout,"VM_STEP(w%d): %V\n",__int_val(state),work[-1]);
+    }
+  } else if (_op_return == &&code_return) {
+    val_fprintf(stdout,"VM_STEP(c%d): %V\n",__int_val(state),*_val_lst_begin(v));
+  } else if (_op_return == &&noeval_return) {
+    if (work != workbase) {
+      val_fprintf(stdout,"VM_STEP(n%d): %V\n",__int_val(state),work[-1]);
+    }
+  } else {
+    fprintf(stdout,"VM_STEP: Invalid VM op return\n");
   }
   fflush(stdout);
   VALIDATE;
