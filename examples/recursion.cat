@@ -37,7 +37,7 @@
   times          #| rec1 rec1... base rec2 rec2... -- now eval the tail of the recursive body n times (once for each level of recursion)
 ] \linrec def
 
-#linrec
+#linrec1
 # - this was my first implementation of linrec
 # - the main issue to note is that the rec2 part of the recursive call is accumulated on the work stack as a sequence of [dup dip] words
 #   - if there are n levels of recursion, there are n copies of [dup dip] on the work stack after the base case. This works, but if we already know there will be n calls, we can just keep a counter and then use times

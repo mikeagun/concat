@@ -12,12 +12,98 @@
 #See the License for the specific language governing permissions and
 #limitations under the License.
 
-# various combinator interconstructions
 
 
-#builds a reasonable base vocabulary from only the combinators: pop dup swap dip if_ lpop lpush
+# ================= Combinator Interconstructions =================
+#
+# One of the nice features of concat (or any pure concatenative language) is
+# that with only a few primitive ops for stack shuffling and conditional
+# evaluation, you can easily implement any control flow operator you want.
+#
+# Some useful resources for understanding concatenative ops:
+# - "The Theory of Concatenative Combinators" (http://tunes.org/~iepos/joy.html)
+#
+# This file has groups of definitions building up useful combinator sets from different primitives
+#
+# NOTES:
+# We assume we have all the basic math ops (for now this file just builds up the ops needed for control flow)
+#
+# To build up from a non-standard set of base ops we can use rresolve to define them in terms of the native op primitives
+# - e.g. [swap pop eval] rresolve \k def ] defines k as [op(swap) op(pop) op(eval)]
+#   - then we could redefine pop (see cake-k below) in terms of k without an infinite recusive loop
+#   - see cake-k minimal base below
+#
+
+
+##
+## ========== MINIMAL BASE ==============
+##
+## Below is some code for constructing from k,kake
+## TODO: there are some quoting/unquoting issues in cake
+#
+## cake-k minimal base
+## 
+## minimal base combinator set (see http://tunes.org/~iepos/joy.html for explanation)
+## - we resolve cake,k to opcodes (vm natives) so we can then define all of concat control flow on top of them
+##
+## k:     B [A]  -- A
+## cake: [B] [A] -- [[B] A] [A [B]]
+##
+##
+## pop  == [] k
+## dip  == cake k
+## cons == cake [] k
+## eval == [[]] dip k
+## dup  == [] cake dip dip
+#
+## k combinator - pops second stack item and then evals first
+##[swap pop eval] rresolve \k def # B [A] -- A
+#[                 #| B [A]
+#  swap            #| [A] B
+#  pop             #| [A]
+#  eval            #|        <|>  A #pushes A onto workstack for eval
+#] rresolve \k def #( B [A] -- A )
+#
+## cake combinator - returns two quotations with top evaluated before/after protected second item
+## - currently wraps when it shouldn't, so we end up with mess of []
+##[ \protect dip quote dup2 dup2 rpush \lpush dip ] rresolve \cake def # B A -- [[B] A] [A [B]]
+#[                    #| B A
+#  \protect dip       #| [B] A
+#  dup iscode \quote if_ # wraps A in code if not code
+#  dup2 dup2          #| [B] [A] [B] [A]
+#  rpush              #| [B] [A] [A [B]]
+#  \lpush dip         #| [[B] A] [A [B]]
+#] rresolve \cake def #( B A -- [[B] A] [A [B]] )
+#
+#
+## more useful base combinator set built from cake and k
+#[ [] k ] \pop def             #( [A]     -- )
+#[ cake k ] \dip def           #( [B] [A] -- A [B] )
+#[ cake [] k ] \cons def       #( [B] [A] -- [[B] A] )
+#[ [[]] dip k ] \eval def      #( [B] [A] -- A )
+#[ [] cake dip dip ] \dup def  #( [A]     -- [A] [A] )
+#
+## for conditional evaluation we'll need some list mutation and conditional evaluation
+## - if we add (lpop lpush if_) we get the below starting op set
+#
+##alternate base op (s') from article linked above that combined with k can be used for everything else
+## Here is a starting point for implementing s'
+##[
+##  #| \C \B \A \X #initial stack
+##
+##  swap [     #| \C \B \X -- \A
+##    dup2 [
+##    ] 
+##  ] dip eval #| [\C B] X \C A
+##] rresolve \s_ def # \C \B \A \X -- [\C B] X \C A
+
+
+
+
+#
+# ======== pop dup swap dip if_ lpop lpush ========
+#
 #  - we still include other basic operations like +/-/etc
-
 
 # == base combinators ==
 #pop         #| A --

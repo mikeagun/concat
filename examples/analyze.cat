@@ -14,14 +14,22 @@
 
 #tools for code analysis
 #
-#This file includes several concat code analysis tools (simple arity checker, abstract interpreter)
+#This file includes several concat code analysis tools
+#  - arity checker - simple determination of arity for fixed-arity functions
+#  - abstract interpreter - abstract VM that can operate over abstract values and determine simple stack effects
 #
-#The majority of this file is an abstract interpreter for concat
-#We essentially implement a concat VM in concat which operates on abstract values instead of real vals
+#TODO: abstract analysis code proper documentation and refactor (after debug val impl)
+# - the pure-concat version still has value for release mode, but the debug val version should be much cleaner
+#TODO: new impl of abstract analysis code using debug vals
+# - will only work on debug build, but should be much cleaner+faster (can extend to work on release)
+#
+#Abstract imterpreter
+# - concat VM in concat which operates on abstract values instead of real vals
 # - By operating on abstract vals, we can answer a couple of useful questions about the input and output stack for the code under analysis
 #   - by assuming the code doesn't perform invalid operations, we can infer things about the input arguments on the stack
-#     - e.g. if we divide by a number, then it isn't zero, and if we use a val as the splitn argument, it must be >= 0 (and <= length of the list being split)
-#   - input stack inference -- if we call +, then we know we have at least 2 vals on stack and they are both numbers
+#     - e.g. if we divide by a number then it isn't zero, and if we use a val as the splitn argument it must be >= 0 (and <= length of the list being split)
+#     - this can also be used to detect some code errors - e.g. abstract types or values incompatible with (possibly abstract) op being evaluated
+#   - input stack inference -- if we call +, then we know we have 2 numbers on top of the stack (and at least 2 vals on stack)
 #   - (not implemented yet) loop analysis
 #     - loop count (as an abstract value)
 #     - maximum range (or floor/ceil/unbounded) for a number modified in a loop
@@ -32,9 +40,23 @@
 # - abstract operators (words) operate on abstract stacks instead of the normal concat stacks to track abstract state
 # - after abstract evaluation, you can determine information like arity of a quotation, types of input and output vals, operations done on an input val, or valid ranges for an input number
 #
-#arity = get arity of quotation or val. only works when all used words/natives have known and fixed arities, otherwise returns (-1 -1)
 
-[ # TODO: compile this info into vm (probably along with function that defines op)
+
+#
+# ======================= arity tester ====================
+#
+# functions:
+# - arity - get arity of 
+
+[ #parse_stack_effects - parse stack effects string
+  # "... -- ..." -- (effects...)
+  #TODO: implement this (and standardize syntax)
+] \parse_stack_effects def
+
+
+#arity = get arity of quotation or val. only works when all used words/natives have known and fixed arities, otherwise returns (-1 -1)
+[ # TODO: get these from vm (compiled in stack effects strings)
+  # stack effects for native opcodes
   ([A B] [C]) \+ def
   ([A B] [C]) \- def
   ([A B] [C]) \* def
@@ -51,13 +73,14 @@
 ] savescope
 dup
 [
+  #({dict} A -- {dict} ([in state] [out state]); ({dict} A -- {dict} ([...] [...])) arity for natives
   ["%v" sprintf] dip #get just name part from native/ident (using "%v")
   dup2 hhas [
     swap hget popd
   ] [
     pop pop ([...] [...])
-  ] ifelse
-] lpush \effects.native def #({dict} A -- {dict} ([in state] [out state]); ({dict} A -- {dict} ([...] [...])) arity for natives
+  ] ifelse 
+] lpush \effects.native def 
 
 [
   ["%v" sprintf] dip #get just name part from native/ident (using "%v")
@@ -91,7 +114,7 @@ qstate
   dup2 - #| min final-min
   \_ dip #| takes gives
   () lpush lpush
-] \_arity.code def
+] \_arity.code def #( [code] -- (takes gives) )
 
 [
   rresolve
@@ -121,30 +144,32 @@ qstate
   ] ifelse
 ] \_arity def
 
-[
+[ # arity - main arity testing function
   dup iscode [
-qstate
     _arity.code
   ] [
-qstate
     _arity
   ] ifelse
-] \arity def
+] \arity def #(A -- (takes gives))
 
 
 
-[ #TODO: build this in
+[ # type.get - get type of val as a string (TODO: builtin?)
   [       isint isfloat isstring islist isident iscode isnative isdict isfile ] [sip swap] findp
   popd #pop arg
   ( "Val" "Int" "Float" "String" "List" "Ident" "Code" "Native" "Dict" "File" )
   swap 2+ nth
-] \type.get def
+] \type.get def #( val -- "Type" )
 
-[ #TODO: build this in
-  dup2 dup2 = dup2 "Val" = or
+[ # type.isa - check whether type is subtype of another (e.g. Int is a Num)
+
+  # TODO: if we add any generic/abstract type support type.isa could probably be builtin
+
+  #| type cmptype
+  2dup = dup2 "Val" = or_
   [ #if types match exactly or the type we are checking against is "Val" we are done
-    pop pop 1
-  ] [
+    2pop 1
+  ] [ #| type cmptype
     swap
     (
       ("Val")
@@ -157,18 +182,23 @@ qstate
       ("Native")
       ("Dict" "Pushable")
       ("File")
-    ) [ lpop [dup2 =] dip swap [popd 1] [pop 0] ifelse ] findp
-    0 > [
-      [ dup2 = ] findp popd 0 ge
+    ) [ #| cmptype type (type2 isa...)
+      lpop [dup2 =] dip swap #| cmptype type (isa...) type=type2
+      [popd 1] [pop 0] ifelse
+    ] findp
+    0 > [ # if type isa list found
+      [ dup2 = ] findp popd 0 ge #| bool
     ] [
       pop pop 0
     ] ifelse
   ] ifelse
-] \type.isa def
+  #| bool
+] \type.isa def #( A B -- bool )
 
-[
+[ # type.couldbe - check whether type could be another (e.g. Num could be an Int)
+  # - opposite of type.isa (if A isa B, B could be an A)
   swap type.isa
-] \type.couldbe def
+] \type.couldbe def #( A B -- bool )
 
 [ \lpop dip dip lpush ] \mapfirst def
 [ 2 mapnth ] \mapsecond def
@@ -181,36 +211,54 @@ qstate
 
 
 
-[
-  [small] \isgeneric def
+[ # Abstract interpreter scope
+  # functions with . in the name are meant to be called (usually on the type before the dot)
+  # - is used as a separator in functions that get called dyamically by building up function name
+
+  # testing for generic/literal types
+  [small] \isgeneric def #generic just has a type (no specific value)
   [dup small [pop 0] [second "lit"=] ifelse] \islit def
   [dup small] \testgeneric def
   [dup small 0 [dsecond "lit"=] ifelse] \testlit def
 
+  # Abstract argument handling
+  # - Arg holds a reference to an abstract val
+  #   - the input stack is an Arg
+  #   - the ref lets us tie input vals to output vals (any Arg sharing same ref shares data)
   [ dup small [pop 0] [second "arg" =] ifelse ] \Val.isarg def
   [ ("Val" "") ref ("Val" "arg") rpush ] \Arg def
   [ [ [[pop] mapsecond] guard ] mapthird ] \Arg.setname def
   [ [ [[dup] mapsecond] guard ] mapthird ] \Arg.getname def
   [ third deref second ] \Arg.name def
   
+  # Abstract Val Type Testing
   [ \first dip type.isa ] \Val.isa def
   [ swap first type.isa ] \Val.couldbe def
   ["List" Val.isa] \Val.islist def
   ["Code" Val.isa] \Val.iscode def
   ["Int" Val.isa] \Val.isint def
+
+
+  # Abstract Val Printing
   ["print" obj.apply "" print] \Val.print def
+
   [ swap "map-df" obj.apply ] \Val.map-df def
   [ swap "map-lr" obj.apply ] \Val.map-lr def
 
+  # Abstract type coersion
+  # - if val couldn't be type then error (debug-time type checking)
+  # - if val could be type then constrain abstract type
   [2dup Val.isa [pop] [ 2dup Val.couldbe [dup2 Val.isarg [Arg.coerce_] [Val.coerce_] ifelse ] [ "Failed Type Coersion" throw ] ifelse ] ifelse] \Val.coerce def
   [ tostring "-coerce" cat toident eval ] \Val.coerce_ def
   [ tostring "-arg-coerce" cat toident eval ] \Arg.coerce_ def
   [ dthird deref first \dfirst dip ne [dthird deref first Arg.coerce_] if ] \Arg.retype def #try to retype arg if the shared obj has been updated
 
+  # Generic Abstract Int
   [dup "Int" Val.isa] \Val.testint def
   [dup Val.isint [dup2 Val.isint] only] \Val.2testint def
 
   
+  # Abstract Val typetesting
   [dup "Pushable" Val.isa] \Val.testpush def
   [dup "Code" Val.isa] \Val.testcode def
   [dup "Ident" Val.isa] \Val.testident def
@@ -218,21 +266,26 @@ qstate
   [dup "List" Val.isa] \Val.testlist def
   [dup "Coll" Val.isa] \Val.testcoll def
 
+  # Abstract boolean check for generic Val
   [ Val.testint [ testlit [ third ] [pop 0] ifelse ] [pop 0] ifelse ] \Val.definitely_true def
   [ Val.testint [ testlit [ third not ] [pop 0] ifelse ] [pop 0] ifelse ] \Val.definitely_false def
   [ Val.definitely_true not ] \Val.maybe_false def
 
+  # Generic Abstract Val
   ("Val") \Val def
   [ first print_ ] \Val-print def
   [ first print_ ] \Val-print_ def
+
   [ swap eval ] dup \Val-map-df def \Val-map-lr def
   
+  # printing functions for abstract Arg
   [ Arg.retype dfirst "Val" = [third deref dsecond empty [first print_] [second print_] ifelse] ["print" obj.apply] ifelse ] \Val-arg-print def
   [ Arg.retype dfirst "Val" = [third deref dsecond empty [first print_] [second print_] ifelse] ["print_" obj.apply] ifelse ] \Val-arg-print_ def
+
   [ Arg.retype dfirst "Val" = [swap eval] ["map-df" obj.apply] ifelse ] \Val-arg-map-df def
   [ Arg.retype dfirst "Val" = [swap eval] ["map-lr" obj.apply] ifelse ] \Val-arg-map-lr def
 
-#Abstract integers
+  # Abstract integer constructors
   ("Int") \Int def
   ("Int" "bool") \Bool def
   ("Int" "lit" 1) \True def
@@ -245,15 +298,18 @@ qstate
   [ swap ("Int" "range") rpush rpush ] \Int.range def
   #[ dup 0 = [pop ("Int" "sign" 0)][0 > ("Int" "sign" +) ("Int" "sign" -) ifelse] ifelse ] \Int.sign def
 
+  # Abstract boolean check for abstract Int
   [ testlit [ third ] [pop 0] ifelse ] \Int.definitely_true def
   [ testlit [ third not ] [pop 0] ifelse ] \Int.definitely_false def
   [ Int.definitely_true not ] \Int.maybe_false def
 
+  # type asserting/coercing for abstract Int
   [ Val.testint not [ "Failed Type Assert" throw ] if ] \Int.assert def
   ["Int" Val.coerce] \Int.coerce def #TODO: handle Float coersion
   [Int.coerce [Int.coerce] dip] \Int.2coerce def
   [Int.assert [Int.assert] dip] \Int.2assert def
 
+  # testing for different abstract Int domains
   [dup small [pop 0] [second "floor"=] ifelse] \Int.isfloor def
   [dup small [pop 0] [second "ceil"=] ifelse] \Int.isceil def
   [dup small [pop 0] [second "range"=] ifelse] \Int.isrange def
@@ -287,6 +343,8 @@ qstate
   [ "add" obj.apply ] \Int.add def
   [ "bool" obj.apply ] \Int.bool def
 
+  # Abstract Int operations
+  # - things you can do with an Int
   [ testgeneric [popd] [dup2 0 = [popd] [Int.testlitoff [ \+ mapthird ] [swap ("Int" "off") rpush rpush] ifelse ] ifelse] ifelse] \Int.off def
   [ dup2 0 = [pop pop ("Int" "lit" 0)] [testgeneric [popd] [Int.testlitscale [ \* mapthird ] [swap dup 1 = [pop][("Int" "scale") rpush rpush]ifelse] ifelse] ifelse] ifelse] \Int.scale def
   [ dup2 0 = ["Divide by Zero"  throw] [testgeneric [popd] [testlit [\/ mapthird] [Int.testdivide [ \* mapthird ] [swap dup 1 = [pop][("Int" "div") rpush rpush]ifelse] ifelse] ifelse] ifelse] ifelse] \Int.divide def
@@ -297,6 +355,8 @@ qstate
   [ 1 swap "off" obj.apply ] \Int.inc def
   [ -1 swap "off" obj.apply ] \Int.dec def
 
+  # Abstract Int vm-internal functions
+  # - probably don't want to call these directly
   [ dfirst dup "Int" type.isa [pop] ["Int" type.couldbe [pop Int] ["Failed Type Coersion" throw] ifelse] ifelse ] \Int-coerce def
   [ first print_ ] \Int-print def
   [ first print_ ] \Int-print_ def
@@ -311,6 +371,7 @@ qstate
   [ ] \Int-neg def
   [ pop Bool ] \Int-bool def
 
+  #this bit o' hack defines all the abstract Int member functions
   ( "bool-" "arg-" "lit-" "floor-" "ceil-" "range-" "sign-" "off-" "scale-" "div-" "+" "*" "/" "_" ) [
     "Int-" rpush
     [ swap eval ] dup2 "map-df" cat toident def
@@ -344,11 +405,12 @@ qstate
   ] each
 
 
+  # Abstract Int Arg -- argument that is known to be an integer
   [ dthird deref first dup "Int" type.isa [swap rest lpush] ["Val" = ["Int" swap rest lpush [["Int" swap rest lpush Int swap rpush] guard] mapthird] ["Failed Type Coersion" throw] ifelse] ifelse ] \Int-arg-coerce def
-
   [ third deref dsecond empty not [ dsecond print_ ":" print_ ] if third "print" obj.apply ] \Int-arg-print def
   [ third deref dsecond empty not [ dsecond print_ ":" print_ ] if third "print_" obj.apply ] \Int-arg-print_ def
 
+  # Int literals -- abstract Int type wrapping a known literal integer
   [ third print_ ] \Int-lit-print def
   [ third print_ ] \Int-lit-print_ def
   [ [inc] maplast ] \Int-lit-inc def
@@ -363,6 +425,7 @@ qstate
   [ [_] maplast ] \Int-lit-neg def
   [ [bool] mapthird ] \Int-lit-bool def
             
+  # Int offset -- abstract Int literal offset wrapper
   [ rest rest lpop first "print" obj.apply " " print_ print_ " +" print_ ] \Int-off-print def
   [ "{" print_ rest rest lpop first "print" obj.apply " " print_ print_ " +" print_ "}" print_ ] \Int-off-print_ def
   [ dup2 [["map-df" obj.apply] mapfourth] dip eval ] \Int-off-map-df def
@@ -374,6 +437,7 @@ qstate
   [ swap testlit [last swap \- mapthird] [ Int.testoff [ dup last [third _ swap Int.off] dip swap Int.sum ] [ swap Int.neg Int.sum ] ifelse ] ifelse ] \Int-off-sub def
   #[ dthird _ abstract swap fourth "ne" obj.apply ] \Int-off-bool def
 
+  # Int scaled -- abstract Int literal scaling wrapper
   [ rest rest lpop first "print" obj.apply " " print_ print_ " *" print_ ] \Int-scale-print def
   [ "{" print_ rest rest lpop first "print" obj.apply " " print_ print_ " *" print_ "}" print_ ] \Int-scale-print_ def
   [ dup2 [["map-df" obj.apply] mapfourth] dip eval ] \Int-scale-map-df def
@@ -383,6 +447,7 @@ qstate
   [ [_] mapthird ] \Int-scale-neg def
   [ dthird 0 = [pop False] [fourth "bool" obj.apply] ifelse ] \Int-scale-bool def
 
+  # Int divided -- abstract Int literal divisor wrapper
   [ rest rest lpop first "print" obj.apply " " print_ print_ " /" print_ ] \Int-div-print def
   [ "{" print_ rest rest lpop first "print" obj.apply " " print_ print_ " /" print_ "}" print_ ] \Int-div-print_ def
   [ dup2 [["map-df" obj.apply] mapfourth] dip eval ] \Int-div-map-df def
@@ -392,6 +457,7 @@ qstate
   [ [_] mapthird ] \Int-div-neg def
   #[ dthird abs abstract swap fourth "abs" obj.apply "le" obj.apply ] \Int-div-bool def
 
+  # Int addition -- abstract Int addition wrapper
   #[ "{" print_ rest rest lpop ["print" obj.apply]dip ["+" print_"print" obj.apply] each "}" print_ ] \Int-+-print def
   [ rest rest lpop swap "print" obj.apply [" " print_ "print" obj.apply " +" print_] each ] \Int-+-print def
   [ "{" print_ rest rest lpop swap "print" obj.apply [" " print_ "print" obj.apply " +" print_] each "}" print_ ] \Int-+-print_ def
@@ -400,6 +466,7 @@ qstate
   [ dup rest rest [Int.islitoff] findp dup 0 ge [3 + \Int.off swap mapnth] [pop \Int.lit dip rpush] ifelse ] \Int-+-off def
   [ swap testlit [last swap Int.off] [Int.sum] ifelse ] \Int-+-add def
 
+  # Int addition -- abstract Int multiplication wrapper
   [ rest rest lpop swap "print" obj.apply [" " print_ "print" obj.apply " *" print_] each ] \Int-*-print def
   [ "{" print_ rest rest lpop swap "print" obj.apply [" " print_ "print" obj.apply " *" print_] each "}" print_ ] \Int-*-print_ def
   [ 2 splitn swap [[dup2 ["map-df" obj.apply] dip swap]map]dip swap cat swap eval] \Int-*-map-df def
@@ -407,6 +474,7 @@ qstate
   [ dup rest rest [Int.islitscale] findp dup 0 ge [3 + \Int.scale swap mapnth] [pop \Int.lit dip rpush] ifelse ] \Int-*-scale def
   [ swap testlit [last swap Int.scale] [Int.mul] ifelse ] \Int-*-mul def
 
+  # Int addition -- abstract Int division wrapper
   [ rest rest lpop swap "print" obj.apply [" " print_ "print" obj.apply " /" print_] each ] \Int-/-print def
   [ "{" print_ rest rest lpop swap "print" obj.apply [" " print_ "print" obj.apply " /" print_] each "}" print_ ] \Int-/-print_ def
   [ 2 splitn swap [[dup2 ["map-df" obj.apply] dip swap]map]dip swap cat swap eval] \Int-/-map-df def
@@ -414,6 +482,7 @@ qstate
   [ dup rest rest [Int.islitdivide] findp dup 0 ge [3 + \Int.divide swap mapnth] [pop \Int.lit dip rpush] ifelse ] \Int-/-divide def
   [ swap testlit [last swap Int.divide] [Int.div] ifelse ] \Int-/-div def
 
+  # Int addition -- abstract Int negation wrapper
   [ last "print" obj.apply " _" print_ ] \Int-_-print def
   [ "{" print_ last "print" obj.apply " _}" print_ ] \Int-_-print_ def
   [ dup2 [["map-df" obj.apply] mapthird] dip eval ] \Int-_-map-df def
@@ -424,6 +493,7 @@ qstate
   [ pop "Bool" print_ ] \Int-bool-print def #| TODO: implement ops over bools
   [ pop "Bool" print_ ] \Int-bool-print_ def
 
+  # Int floor -- abstract integer with known lower bound
   [ ">=" print_ rest rest lpop first "print" obj.apply ] \Int-floor-print def
   [ "{" print_ ">=" print_ rest rest lpop first "print" obj.apply "}" print_ ] \Int-floor-print_ def
   [ dup2 [["map-df" obj.apply] mapfourth] dip eval ] \Int-floor-map-df def
@@ -435,14 +505,16 @@ qstate
   [ swap testlit [last swap \- mapthird] [ Int.testfloor [ dup last [third _ swap Int.off] dip swap Int.sum ] [ swap Int.neg Int.sum ] ifelse ] ifelse ] \Int-floor-sub def
   #[ dthird _ abstract swap fourth "ne" obj.apply ] \Int-off-bool def
 
-#Abstract lists
+  # Abstract collection constructors
   ("Coll") \Coll def
   ("List") \List def
   ("Code") \Code def
   
+  # Abstract list Arg
   [ ("List" "" () ()) ref ("List" "arg") rpush (0 0) cat ] \List.Arg def #| -- ( "List" "arg" Ref{"List" "" () ()} 0 0 )
   [ (() ()) lpush "List" swap lpush ref ("List" "arg") rpush (0 0) cat ] \List.arg def #| "Name" -- ( "List" "arg" Ref{"List" "Name" () ()} 0 0 )
 
+  # Abstract Collection ops - covers lists,code (quotation), and generic collection
   [ dfirst ("rpush") lpush rpush rpush ] \Coll.rpush_ def
   [ dfirst ("lpush") lpush rpush rpush ] \Coll.lpush_ def
   [ swap dfirst ("cat") lpush [() rpush rpush] dip rpush ] \Coll.cat_ def
@@ -491,7 +563,6 @@ qstate
 
   [ dfirst "Coll" type.isa [pop] [dfirst "Val" = [pop Coll] ["Failed Type Coersion" throw] ifelse] ifelse ] \Coll-coerce def
   [ pop " ..." print_ ] \Coll-print_part def
-  [ swap eval ] dup \Coll-map-df def \Coll-map-df def
   [ swap eval ] dup \Coll-map-df def \Coll-map-lr def
   [ Val swap ] \Coll-rpop def
   [ Val swap ] \Coll-lpop def
@@ -500,6 +571,8 @@ qstate
   [ pop ] \Coll-cat def
   [ pop Bool ] \Coll-empty def
 
+  # Abstract Coll Arg handling
+  # - abstract coll args use refs to link between Arg and any abstract elements in list
   [ dthird deref first dup "Coll" type.isa [swap rest lpush (0 0) cat] ["Val" = ["Coll" swap rest lpush (0 0) cat [["Coll" swap rest lpush (() ()) cat] guard] mapthird] ["Failed Type Coersion" throw] ifelse] ifelse ] \Coll-arg-coerce def
 
   [
@@ -606,7 +679,7 @@ qstate
   [ Coll.cat ] \Coll-cat-cat def
   [ third dup empty [pop 1] [ lpop ["empty" obj.apply] dip [dup empty not [dup2 Val.maybe_true] and] [ lpop ["and" obj.apply] dip ] while pop ] ifelse ] \Coll-cat-empty def
 
-  #TODO: something better than duplicating the functions (e.g. inheritance)
+  #TODO: something better than duplicating the functions to define all the abstract Coll member functions
   ( "" "arg-" "a-" "lit-" "rpush-" "lpush-" "cat-" ) [
     ("print_part" "map-df" "map-lr" "rpop" "lpop" "rpush" "lpush" "cat" "empty") [
       dup2 rpush dup "Coll-" rpush toident getdef swap
@@ -636,8 +709,9 @@ qstate
     [toident def] sip2 "_" cat toident def
   ] each
 
-#Abstract expressions
-  #TODO: maybe we have a single "expr" type to collect some/all this info
+  #Abstract expressions -- abstract val composed of an expression/op over one or more abstract vals
+
+  #TODO: maybe we have a single "expr" type to collect some/all this info for simple ops
   [ ("Int" "empty") rpush ] \Coll.empty_ def
   [ ("Int" "small") rpush ] \Coll.empty_ def
   [ ("Int" "size") rpush ] \Coll.size_ def
@@ -650,9 +724,10 @@ qstate
   [ ("Int" "and") rpush rpush ] \Int.and_ def
   [ ("Int" "or") rpush rpush ] \Int.or_ def
 
-#Abstract interpreter
+  #Abstract interpreter
 
   #call type-specific named function <top> on <second>
+  # - uses the abstract val type system to get type and call correct function
   [
     dup2 abstract.isopt [
       () swap [
@@ -664,13 +739,15 @@ qstate
       cat
       toident eval
     ] ifelse
-  ] \obj.apply def #| ... (val) "op"
+  ] \obj.apply def # (val) "op" -- (val)
 
 
+  # abstract stack type (actually a list)
   [ List.Arg ] \Stack.Arg def
   [ List.empty ] \Stack.empty def
   [ Coll.definitely_notempty ] \Stack.definitely_notempty def
 
+  # abstract stack ops
   [ List.rpop ] \Stack.pop def #| (stack top) -- (top) (stack)
   [ List.rpush ] \Stack.push def
   [ Stack.pop Stack.pop swapd ] \Stack.pop2 def
@@ -680,26 +757,27 @@ qstate
   [ [flip3] dip Stack.push Stack.push Stack.push ] \Stack.push3 def
   [ [4 flipn] dip 4 \Stack.push times ] \Stack.push4 def
 
+  # typed pop from stack (pops and coerces popped abstract val)
   [ Stack.pop [Int.coerce] dip ] \Stack.popint def
   [ Stack.pop [Coll.coerce] dip ] \Stack.popcoll def
   [ Stack.popint Stack.popint swapd ] \Stack.pop2int def
   [ Stack.popcoll Stack.popcoll swapd ] \Stack.pop2coll def
 
-  [
+  [ # append list to stack
     dup2 empty not [ "Continuation not empty (Not Implemented yet)" throw ] if popd
   ] \Stack.rcat def
 
-  [
+  [ # push val onto work stack
     swap Val.testcode [dup Coll.definitely_empty] and [pop] [swap Stack.push] ifelse
   ] \Work.push def
 
-  [
+  [ # pop next val to eval
     Stack.pop
     [ Val.testcode ] dip swap
     [ [List.lpop] dip Work.push ] if
   ] \Work.popnext def
 
-  [
+  [ # whether work stack is definitely not empty
     dup Stack.definitely_notempty
   ] \Work.hasnext def
 
@@ -757,7 +835,7 @@ qstate
 
   [dup empty [pop "A"] [rpop dup2 "Z" = [popd nextname "A" cat] [[0 getbyte inc 0 setbyte] dip rpush] ifelse ] ifelse] \nextname def
 
-  [
+  [ # print stack effects after abstract eval of val
     () rpush abstract Stack.Arg dup swapd
     [ dowork pop ] dip #eval work
 
@@ -771,6 +849,7 @@ qstate
     "" swap [dup Val.isarg [Arg.getname swap empty] and [[nextname dup]dip Arg.setname] if] Val.map-lr popd #assign names to unnamed args ordered by input stack stack
     "" swap Arg.setname #clear placeholder name for stack
 
+    # TODO: generate string instead (sprintf)
     "(" print_ "print_part" obj.apply " -- " print_
     "print_part" obj.apply " )" print
 
@@ -779,15 +858,17 @@ qstate
 ] savescope dup dup
 [
   \obj.apply usescope_
-] lpush \a def #| ... (val) "op" -- apply op to abstract vals
+] lpush \a def #| ... (val) "op" -- apply op to abstract val
 [
   \eval usescope_
 ] lpush \a.do def
 [
   \dowork usescope_
-] lpush \a.dowork def #| ... (val) "op" -- apply op to abstract vals
+] lpush \a.dowork def
 
-[
+# functions for working with abstract vals
+
+[ # create abstract val from literal/concrete val
   dup type.get ("lit") lpush rpush
 ] \abstract def #| val -- ("Type" "lit" val)  convert literal value to abstract
 
@@ -834,5 +915,9 @@ qstate
 [
   dupd abstract.isa not [ "Type Assert Failed" throw ] if
 ] \abstract.asserttype def
+
+[
+  \print_effects a.do
+] \stack_effects def
 
 #[[(1 2 3) swap cat lpop lpop lpop lpop lpop lpush swap cat lpop] print_effects] a.do

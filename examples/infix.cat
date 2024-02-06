@@ -116,7 +116,7 @@
             ] ifelse
             0 #expect val
           1 ] only]
-        ] [sip swap] findp -1 = [ #findp case statement
+        ] [sip swap] findp -1 = [ #findp case statement (default)
           #dup2 1 ne ["!expect_op" throw] if
           bury3 \rpush dip2
         ] \pop ifelse

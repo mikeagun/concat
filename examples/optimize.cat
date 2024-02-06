@@ -17,6 +17,7 @@
 #   - keeps recursion stack to avoid infinite recursion
 # - this is old code and needs to be updated+documented
 
+# resolve/rresolve are now builtins, but below are definitions from basic dictionary ops
 #[ dup isident [dup defined] 0 ifelse [ dup getdef dup iscode not \swap if pop ] if ] \_resolve def
 #[ dup isident [dup defined] 0 ifelse [ dup getdef dup iscode not [swap pop 1] [pop 0] ifelse ] 0 ifelse ] \_tryresolve def
 #[ \tryresolve [] while ] \resolve def #recursively resolve ident until it is either a simple object or ident with code as definition
@@ -52,4 +53,5 @@
 [ () swap inline.only_ popd ] \inline.only def
 
 #recursively replace idents and natives with their unsafe variants where one exists
+#  NOTE: current version of concat doesn't include unsafes, and they may be handled differently when included again
 [ dup iscode [\unsafe.rec map] \unsafe ifelse ] \unsafe.rec def

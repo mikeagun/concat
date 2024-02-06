@@ -14,6 +14,7 @@
 
 3 [ "hello1" print ] times
 
-5 [ dec dup ] [ "hello2" print ] while
+5 [ dec dup ] [ "hello2" print ] while pop
 
 [1 2 3] [ inc print ] each
+

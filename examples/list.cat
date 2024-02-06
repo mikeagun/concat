@@ -13,39 +13,78 @@
 #limitations under the License.
 
 # Library of functions over lists
-# - Some of these are the actual implementations for the concat builtins for various operations (e.g. filter,map,mmap)
-# - For others there are native implementations for performance, with equivalent stack effects
-#   - the difference being that different vals may be hidden different places on the work stack between versions
-
 #
-#filter list elements through condition
-[ dup2 clearlist flip3 [ flip3 dup3 flip3 dup dip3 [ dig2 \rpush \popd ifelse] dip ] each pop ] \filter def
-#[                      #| list [cond]
-#  dup2 clearlist flip3 #| [] [cond] list (empty list same type as orig)
-#  [                    #| [...] [cond] el
-#    flip3 dup3         #| el [cond] [...] el
-#    flip3 dup          #| el el [...] [cond] [cond]
-#    dip3               #| el cond el [...] [cond]
-#    [                  #| el cond el [...]
-#      dig2             #| el [...] bool
-#      [                #| el [...] -- keep val
-#        rpush          #| [....]
-#      ] [              #| el [...] -- drop val
-#        popd           #| [...]
-#      ] ifelse
-#    ] dip              #| [....] [cond]
-#  ] each               #| newlist [cond]
-#  pop                  #| newlist
-#]                      #| newlist
-#\filter def
+# All functions added here should be stack-safe
+# - i.e. as long as eval args return the correct vals on top their effects don't otherwise matter
+# - practically that means args should be evaluated dip'd under all function local vals
+#
+# NOTES:
+# - These both serve as generic function examples and some of these are the actual builtin examples
+#   - some that are currently builtins may eventually be opcodes, at least on larger feature-set VMs
+# - these are written as low-level concat examples
+#   - this will be less important after we have optimizer and compiler
+# - to aid with reading the code there are very detailed stack comments
+#   - when the stack-comment parser and checker are finished this should also make the code easily verifiable
+#   - with stack-comment generator in the future we should be able to semi-automatically annotate with ide/editor plugin
+#
+# TODO: better document and make formatting consistent
+# TODO: standardized stack-effects/stack comments for all functions
 
-##filter list for odd numbers
-#[1 2 3 4 5] [2%] filter
-##filter for numbers <= their index
+#[ dup [ swapd 0 swap swapnth bury2 \eval dip ] dip swapd setnth ] \mapnth def
+[                  #| [list] [A] n
+  dup [            #| [list] [A] n
+    swapd          #| [A] [list] n
+    0 swap swapnth #| [A] [list] nth  # nth in [list] swapped with 0 (so we don't need to copy)
+    bury2          #| nth [A] [list]
+    \eval dip      #| nthA [list]
+  ] dip            #| nthA [list] n
+  swapd setnth     #| [newlist]
+] \mapnth def      #( [...] [A] n -- [...] )
+
+#this version of mapnth only requires dnth and setnth (not swapnth), buf creates a clone of the mapped element
+#[ dup [ swapd dnth bury2 \eval dip ] dip swapd setnth ] \mapnth1 def
+[               #| [list] [A] n
+  dup [         #| [list] [A] n
+    swapd       #| [A] [list] n
+    dnth        #| [A] [list] nth
+    bury2       #| nth [A] [list]
+    \eval dip   #| nthA [list]
+  ] dip         #| nthA [list] n
+  swapd setnth  #| [newlist]
+] \mapnth1 def   #( [...] [A] n -- [...] )
+
+
+
+#filter - filter list elements through condition
+#[ dup2 clearlist flip3 [ flip3 dup3 flip3 dup dip3 [ dig2 \rpush \popd ifelse] dip ] each pop ] \filter def
+[                      #| list [cond]
+  dup2 clearlist flip3 #| [] [cond] list (empty list same type as orig)
+  [                    #| [...] [cond] el
+    flip3 dup3         #| el [cond] [...] el
+    flip3 dup          #| el el [...] [cond] [cond]
+    dip3               #| el cond el [...] [cond]
+    [                  #| el cond el [...]
+      dig2             #| el [...] bool
+      [                #| el [...] -- keep val
+        rpush          #| [....]
+      ] [              #| el [...] -- drop val
+        popd           #| [...]
+      ] ifelse
+    ] dip              #| [....] [cond]
+  ] each               #| newlist [cond]
+  pop                  #| newlist
+]                      #| newlist
+\filter def
+
+## Examples:
+##
+## filter list for odd numbers:
+#[1 2 3 4 5] [2 %] filter
+## filter for numbers <= their index:
 #0 [0 3 2 7 4] [dup2 le \inc dip] filter
 #list clear
 
-#filter list elements through condition returning both sets (vals returning true,false)
+#filter2 - filter list elements through condition returning both sets (vals returning true,false)
 [                      #| list [cond]
   [ dup clearlist dup flip3 ] dip swap #| [] [] [cond] [list]
   [                    #| [...] [...] [cond] el
@@ -61,23 +100,53 @@
 ]                      #| (matches) (!matches)
 \filter2 def
 
-#run function on each element of list (producing new list with same number of elements)
-[ dup2 clearlist flip3 [ bury2 dup dip2 \rpush dip ] each pop ] \map def
-#[               #| (list) [code] -- (newlist)
-#  dup2 clearlist#| (list) [code] ()
-#  flip3         #| () [code] (list)
-#  [             #| (...) [code] el
-#    bury2       #| el (...) [code]
-#    dup         #| el (...) [code] [code]
-#    dip2        #| el code (...) [code]
-#    \rpush dip  #| (... newel) [code]
-#  ] each        #| (newlist) [code]
-#  pop           #| (newlist)
-#] \map def      #| (newlist)
 
-##increment each item in list
+#some - whether at least one element of list passes condition (returns true on first pass, else false)
+[
+  #| (...) [A]
+  [               #| (...) [A] [L]
+    dup3 empty    #| (...) [A] [L] list_not_empty
+    0 [           #| (el ...) [A] [L]
+      \lpop dip2 dup2 dip3 #| elA (...) [A] [L]
+      dig3 1 [dup eval] ifelse   #| either return 1 or recurse again
+    ] ifelse
+  ]               #| [L]
+  dup eval        #| [L] L
+  [pop pop pop] dip
+] \some def #( (...) [cond] -- bool )
+
+#all - whether all elements of list pass condition (returns false on first fail, else true)
+[
+  #| (...) [A]
+  [               #| (...) [A] [L]
+    dup3 empty    #| (...) [A] [L] list_not_empty
+    1 [           #| (el ...) [A] [L]
+      \lpop dip2 dup2 dip3 #| elA (...) [A] [L]
+      dig3 [dup eval] 0 ifelse   #| either return 1 or recurse again
+    ] ifelse
+  ]               #| [L]
+  dup eval        #| [L] L
+  [pop pop pop] dip
+] \all def #( (...) [cond] -- bool
+
+
+#map - run function on each element of list (producing new list with same number of elements)
+#[ dup2 clearlist flip3 [ bury2 dup dip2 \rpush dip ] each pop ] \map def
+[                #| (list) [code] -- (newlist)
+  dup2 clearlist #| (list) [code] ()
+  flip3          #| () [code] (list)
+  [              #| (...) [code] el
+    bury2        #| el (...) [code]
+    dup          #| el (...) [code] [code]
+    dip2         #| el code (...) [code]
+    \rpush dip   #| (... newel) [code]
+  ] each         #| (newlist) [code]
+  pop            #| (newlist)
+] \map def       #| (newlist)
+
+## increment each item in list
 #[1 2 3 4 5] [inc] map
-##subtract each element from the previous one
+## subtract each element from the previous one
 #0 [1 2 3 4 5] [dup dig2 -] map
 ##0 [1 2 3 4 5] [  #| prev el
 ##  dup dig2       #| el el prev
@@ -85,26 +154,16 @@
 ##] map            #| last [diff01 diff12 ...]
 #list clear
 
-#
-[ swapd each ] \reduce def #| (a b c) init [body] -- init a body b body c body
+# reduce - reduce list starting from accumulator
+#[ swapd each ] \reduce def #( (a b c) init [Body] -- init a Body b Body c Body )
+[             #| (...) init [Body]
+  swapd       #| init (...) [Body]
+  each        #| acc # evals Body on each element of list
+] \reduce def #( (a b ...) init [Body] -- init a Body b Body ... )
 
-#run function on each element of list, and then append result to new list
+#mmap - run function on each element of list, and then append result to new list
 #since list results are concatenated, can produce zero or more elements in new list for each el of old list
-[ dup2 clearlist flip3 [ bury2 dup dip2 \rappend dip ] each pop ] \mmap def
-#[                       #| list func
-#  dup2 clearlist        #| list func [] (same list type)
-#  flip3                 #| [] func list
-#  [                     #| [...] [code] el
-#    bury2               #| el [...] [code]
-#    dup                 #| el [...] [code] [code]
-#    dip2                #| el code [...] [code]
-#    \rappend dip        #| (... newels) [code]
-#  ] each                #| (newlist) [code]
-#  pop                   #| newlist
-#]                       #| newlist
-#\mmap def
-
-#[ dup2 clearlist flip3 [ bury2 dup dip2 dup3 iscoll \cat \lpush ifelse dip ] eachr pop ] \mmapr def
+#[ dup2 clearlist flip3 [ bury2 dup dip2 \rappend dip ] each pop ] \mmap def
 [                       #| list func
   dup2 clearlist        #| list func [] (same list type)
   flip3                 #| [] func list
@@ -112,10 +171,25 @@
     bury2               #| el [...] [code]
     dup                 #| el [...] [code] [code]
     dip2                #| el code [...] [code]
-    dup3 iscoll 
+    \rappend dip        #| (... newels) [code]
+  ] each                #| (newlist) [code]
+  pop                   #| newlist
+]                       #| newlist
+\mmap def
+
+#mmapr - mmap list in reverse order
+#[ dup2 clearlist flip3 [ bury2 dup dip2 dup3 islisttype \cat \lpush ifelse dip ] eachr pop ] \mmapr def
+[                       #| list func
+  dup2 clearlist        #| list func [] (same list type)
+  flip3                 #| [] func list
+  [                     #| [...] [code] el
+    bury2               #| el [...] [code]
+    dup                 #| el [...] [code] [code]
+    dip2                #| el code [...] [code]
+    dup3 islisttype 
       \cat              #| [newels ...] [code]
       \lpush            #| [newel ...] [code]
-    ifelse              #| newel [...] [code] \lpush OR [newels] [...] [code] \cat
+    ifelse              #| newel [...] [code] lpush OR [newels] [...] [code] cat
     dip
   ] eachr               #| (newlist) [code]
   pop                   #| newlist
@@ -129,46 +203,46 @@
 #list clear
 
 #apply each function to value, producing list of same length
-[ dup clearlist swap [ swap [sip swap] dip rpush ] each swap pop ] \cleave def
-#[                      #| val funclist
-#  dup clearlist swap   #| val [] funclist (same list type)
-#  [                    #| val [...] func
-#    swap               #| val func [...]
-#    [sip swap] dip     #| val el [...]
-#    rpush              #| val [....]
-#  ] each               #| val newlist
-#  swap pop             #| newlist
-#]                      #| newlist
-#\cleave def
+#[ dup clearlist swap [ swap [sip swap] dip rpush ] each swap pop ] \cleave def
+[                      #| val funclist
+  dup clearlist swap   #| val [] funclist (same list type)
+  [                    #| val [...] func
+    swap               #| val func [...]
+    [sip swap] dip     #| val el [...]
+    rpush              #| val [....]
+  ] each               #| val newlist
+  swap pop             #| newlist
+]                      #| newlist
+\cleave def #( x ([A] [B] [C]) -- (xA xB xC) )
 
 
 #apply each function to a value from the stack, producing list of same length
-[ dup clearlist swap dup size swap [ dup2 inc dipn dup inc dign dig2 rpush swap dec ] each pop ] \spread def
-#[                           #| ... funclist
-#  dup clearlist swap        #| ... () funclist
-#  dup size swap             #| ... () n funclist
-#  [                         #| x ... (...) n [Func]
-#    dup2                    #| x ... (...) n [Func] n
-#    inc dipn                #| xFunc ... (...) n
-#    dup inc dign            #| ... (...) n xFunc
-#    dig2 rpush swap         #| ... (....) n
-#    dec                     #| ... (....) n-1
-#  ] each                    #| resultlist 0
-#  pop                       #| resultlist
-#]                           #| resultlist
-#\spread def
+#[ dup clearlist swap dup size swap [ dup2 inc dipn dup inc dign dig2 rpush swap dec ] each pop ] \spread def
+[                           #| ... funclist
+  dup clearlist swap        #| ... () funclist
+  dup size swap             #| ... () n funclist
+  [                         #| x ... (...) n [Func]
+    dup2                    #| x ... (...) n [Func] n
+    inc dipn                #| xFunc ... (...) n
+    dup inc dign            #| ... (...) n xFunc
+    dig2 rpush swap         #| ... (....) n
+    dec                     #| ... (....) n-1
+  ] each                    #| resultlist 0
+  pop                       #| resultlist
+]                           #| resultlist
+\spread def #( x y z ([A] [B] [C]) -- (xA yB zC) )
 
 
 #each variant, where a counter (from 0) is placed above each list element
-[ 0 dig2 [flip3 dup2 dup2 dip2 inc] each pop pop ] \eachi def
-#[                            #| list [body]
-#  0 dig2                     #| [body] 0 list
-#  [                          #| [body] i el
-#    flip3 dup2 dup2          #| el i [body] i [body]
-#    dip2 inc                 #| el i body [body] i+1
-#  ] each                     #| el0 0 body el1 1 body ... [body] n
-#  pop pop
-#] \eachi def
+#[ 0 dig2 [flip3 dup2 dup2 dip2 inc] each pop pop ] \eachi def
+[                            #| list [body]
+  0 dig2                     #| [body] 0 list
+  [                          #| [body] i el
+    flip3 dup2 dup2          #| el i [body] i [body]
+    dip2 inc                 #| el i body [body] i+1
+  ] each                     #| el0 0 body el1 1 body ... [body] n
+  pop pop
+] \eachi def #( (x y z) [A] -- x 0 A y 1 A z 2 A )
 
 
 
@@ -188,7 +262,7 @@
   dup eval        #| n [A] [L] L
                   #| A A ... 0 [A] [L]
   pop pop pop     #| A A ...
-] \times def
+] \times def #( 3 [A] -- A A A )
 
 #times loop (with diff even/odd iterations)
 [                   #| n [A]
@@ -218,7 +292,7 @@
     pop pop         #| A A ... 0 [A]
   ] if              #| A A ... 0 [A]
   pop pop           #| A A ...
-] \times_1 def
+] \times_1 def #( 3 [A] -- A A A )
 
 #each loop
 [                 #| (list) [A]
@@ -234,7 +308,7 @@
   ]               #| (list) [A] [L]
   dup eval        #| (list) [A] [L] L
   pop pop pop
-] \each def
+] \each def #( (x y z) [A] -- x A y A z C )
 
 #reversed each loop
 [                 #| (list) [A]
@@ -250,7 +324,7 @@
   ]               #| (list) [A] [L]
   dup eval        #| (list) [A] [L] L
   pop pop pop
-] \eachr def
+] \eachr def #( (x y z) [A] -- z A y A x A )
 
 #while loop
 [                 #| [C] [A]
@@ -280,19 +354,8 @@
   popd dec splitn #| (lside) (rside)
 ] \splitp def
 
-#find n for first element of list that returns true from predicate
-[
-  #| (...) [A]
-  0 1 #| (...) [A] n !found
-  [ [ inc dup3 empty [pop 0 0] 1 ifelse ] 0 ifelse ] [ # while !found and !empty (and if empty replace index with zero so it goes to -1 below)
-    #| (...) [A] n
-    \lpop dip2 dup2 dip3 #| found (...) [A] n
-    dig3 not             #| (...) [A] n !found
-  ] while
-  popd popd dec
-] \findp1 def
-
-#findp implemented from dup-eval recursion
+#findp - find n for first element of list that returns true from predicate
+# - findp implemented from dup-eval recursion
 [
   #| (...) [A]
   0 1 #| (...) [A] n !found
@@ -309,34 +372,86 @@
   dup eval        #| [L] L
   pop [pop pop] dip
   dec
-] \findp def
+] \findp def #( (...) [A] -- n )  # index (from 1) of matching element (or -1)
 
-
+#findp1 - while loop based findp
 [
   #| (...) [A]
-  [               #| (...) [A] [L]
-    dup3 empty    #| (...) [A] [L] list_not_empty
-    0 [           #| (el ...) [A] [L]
-      \lpop dip2 dup2 dip3 #| elA (...) [A] [L]
-      dig3 1 [dup eval] ifelse   #| either return 1 or recurse again
-    ] ifelse
-  ]               #| [L]
-  dup eval        #| [L] L
-  [pop pop pop] dip
-] \some def #whether at least one element of list passes condition
+  0 1 #| (...) [A] n !found
+  [ [ inc dup3 empty [pop 0 0] 1 ifelse ] 0 ifelse ] [ # while !found and !empty (and if empty replace index with zero so it goes to -1 below)
+    #| (...) [A] n
+    \lpop dip2 dup2 dip3 #| found (...) [A] n
+    dig3 not             #| (...) [A] n !found
+  ] while
+  popd popd dec
+] \findp1 def
 
-[
-  #| (...) [A]
-  [               #| (...) [A] [L]
-    dup3 empty    #| (...) [A] [L] list_not_empty
-    1 [           #| (el ...) [A] [L]
-      \lpop dip2 dup2 dip3 #| elA (...) [A] [L]
-      dig3 [dup eval] 0 ifelse   #| either return 1 or recurse again
-    ] ifelse
-  ]               #| [L]
-  dup eval        #| [L] L
-  [pop pop pop] dip
-] \all def #whether all elements of list pass condition
+
+# sorted_findp - binary search through sorted list with predicate
+# - Cmp predicate (x -- -1 || 0 || 1) returns x </=/> target element
+#[ 0 dup3 size [ dup 0 > ] [ dup 2 / [ - dec ] sip dup 4 buryn [ splitn lpop swapd ] 4 dipn [ dup dip3 ] dip3 6 dign dup 0 = [ pop popd + \3pop dip -1 ] [ 0 < [ swap [ + inc ] dip 4 dign pop ] [ popd dig3 pop ] ifelse_ ] ifelse_ ] while 0 = [ 3pop -1 ] if_ ] \sorted_findp def
+[ # sorted_findp - like findp, but binary instead of sequential search
+  #| (...) [Cmp]
+
+  # base case: single element/empty, return val 1 or 0
+  # else: compare mid, take left/right
+  0 dup3 size            #| (...) [Cmp] 0 n
+    [dup 0 >]            # while(n>0)
+    [                    #| (a... b ...) [Cmp] i n
+      dup 2 / #get pivot #| (a... b ...) [Cmp] i n n/2
+      [- dec] sip        #| (a... b ...) [Cmp] i n-n/2-1 n/2
+      dup 4 buryn        #| (a... b ...) n/2 [Cmp] i rhs n/2
+      [                  #| (a... b ...) n/2  <|>  [Cmp] i rhs n/2
+        splitn           #| (a...) (b ...)
+        lpop swapd       #| b (a...) (...)
+      ] 4 dipn           #| b (a...) (...) [Cmp] i rhs n/2
+      [                  #| b (a...) (...) [Cmp]  <|>  i rhs n/2
+        dup dip3         #| bCmp (a...) (...) [Cmp]
+      ] dip3             #| bCmp (a...) (...) [Cmp] i rhs n/2
+      6 dign             #| (a ...) (...) [Cmp] i rhs n/2 bCmp
+      dup 0 = [ # bCmp=0
+        pop popd +       #| (a ...) (...) [Cmp] i+n/2
+        \3pop dip -1     #| i+n/2 -1
+      ] [      # bCmp!=0 #| (a ...) (...) [Cmp] i rhs n/2 bCmp
+        0 < [  # bCmp>0  #| (a ...) (...) [Cmp] i rhs n/2
+          swap [+ inc] dip    #| (a ...) (...) [Cmp] i+n/2+1 rhs
+          4 dign pop     #| (...) [Cmp] i+n/2 rhs
+        ] [    # bCmp<0  #| (a ...) (...) [Cmp] i rhs n/2
+          popd dig3 pop  #| (a...) [Cmp] i n/2
+        ] ifelse_        #| (...) [Cmp] i+n/2 rhs || (a...) [Cmp] i n/2
+      ] ifelse_          #| i+n/2 -1 || (...) [Cmp] i+n/2 rhs || (a...) [Cmp] i n/2
+    ]
+  while                  #| () [Cmp] i 0 || i -1
+  0 = [3pop -1] if_      #| -1 || i
+
+
+
+  #[   # single el >=Cmp #| (x) [Cmp]
+  #  swap first          #| [Cmp] x
+  #  \eval sip           #| x<Cmp x
+  #  \first dip eval     #|
+  #  first 1             #| x
+  #] [ # empty           #| () [Cmp]
+  #  2pop 0              #| 0
+  #] ifelse_             #| x 1 || 0
+
+
+
+  #dup2 size dup 2 <      #| (...) [Cmp] n n<2
+  #[                      # empty or single el
+  #  popd 0 =             #| () 0 || (x) 1
+  #    [pop 0]
+  #    [first 1]
+  #  ifelse
+  #] [                    #
+  #                       #
+  #] ifelse_
+] \sorted_findp def
+# Examples:
+# (1 2 3 4 5) [3 compare] sorted_findp # returns 2
+# (1 2 3 4 5) [5 compare] sorted_findp # returns 4
+# (1 2 3 4 5) [0 compare] sorted_findp # returns -1
+# (1 2 3 4 5) [6 compare] sorted_findp # returns -1
 
 
 [                       #| (l1) (l2) [A]
@@ -369,25 +484,3 @@
 ] \zipwith def #combine two lists into one using given val
 
 
-[ dup [ swapd 0 swap swapnth bury2 \eval dip ] dip swapd setnth ] \mapnth def
-#[                  #| [list] [A] n
-#  dup [            #| [list] [A] n
-#    swapd          #| [A] [list] n
-#    0 swap swapnth #| [A] [list] nth -- nth in [list] swapped with 0 (so we don't need to copy)
-#    bury2          #| nth [A] [list]
-#    \eval dip      #| nthA [list]
-#  ] dip            #| nthA [list] n
-#  swapd setnth     #| [newlist]
-#] \mapnth def      # ( [...] [A] n -- [...] )
-
-#this version of mapnth only requires dnth and setnth (not swapnth), buf creates a clone of the mapped element
-[ dup [ swapd dnth bury2 \eval dip ] dip swapd setnth ] \mapnth1 def
-#[               #| [list] [A] n
-#  dup [         #| [list] [A] n
-#    swapd       #| [A] [list] n
-#    dnth        #| [A] [list] nth
-#    bury2       #| nth [A] [list]
-#    \eval dip   #| nthA [list]
-#  ] dip         #| nthA [list] n
-#  swapd setnth  #| [newlist]
-#] \mapnth def   # ( [...] [A] n -- [...] )

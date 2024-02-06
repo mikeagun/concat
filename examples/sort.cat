@@ -14,43 +14,50 @@
 
 #various sorting algorithms
 
-#quicksort (using first element as pivot)
-[
+[ #qsort - quicksort (using first element as pivot)
+  # basic idea is keep splitting on pivot value, recurse on both halves of the pivot
+  # - if zero/one elements we are sorted
+  # - we use filter2 to get the vals < or >= the pivot
+  #| (...)
   [dup small] #base case is 0/1 elements
   [] #do nothing for small lists (already sorted)
   [lpop [dup2 <] filter2] #pivot on first el, and split into <,>= pivot
   [swapd lpush cat] #insert pivot between sorted left/right side
   binrec #binary recursion
+  #| (...)
 ] \qsort def
 
-[   #| ... x y [A]
+[ #apply2_1 - apply [A] to the next 2 of stack only, then restore stack under just top of result stack
+  #| ... x y [A]
   \collapse dip3  #| (...) x y [A]
   dig3 [ eval collapse last ] dip #| last_of(x y A) (...)
   swap \expand dip
-] \apply2_1 def #apply [A] to the next 2 of stack only, then restore stack under just top of result stack
+] \apply2_1 def #( ... x y [A] -- x y A (...) \expand dip )
 
-#quicksort with comparator function
-[
+[ # qsortc - quicksort with comparator function
+  # same idea as qsort, only we take an extra comparison predicate
+  # - predicate is inserted into the binrec body (qsortc a little more complicated, no custom predicate overhead)
+  # - we also add apply2_1 call to make the predicate stack-safe
+
+  #| (...) [cmp]
   [ [dup small] #base case is 0/1 elements
   [] ] dip #do nothing for small lists (already sorted)
-  #| [dup small] [] [cond]
-  [dup2] rpush \apply2_1 swap rpush #| [dup small] [] [dup2 [cond] apply2_1 ]
-  [ lpop ] rpush  \filter2 swap rpush #| [dup small] [] [ lpop [dup2 [cond] apply2_1] filter2 ]
+                                      #| [dup small] [] [cmp]
+  [dup2] rpush \apply2_1 swap rpush   #| [dup small] [] [dup2 [cmp] apply2_1 ]
+  [ lpop ] rpush  \filter2 swap rpush #| [dup small] [] [ lpop [dup2 [cmp] apply2_1] filter2 ]
   [swapd lpush cat] #insert pivot between sorted left/right side
-  binrec #binary recursion
+  binrec #binary recursion - see examples/recursion.cat
 ] \qsortc def
 
 
 
 
-#merge two sorted lists
-[
-#| (list1) (list2) ()
-() [ dup3 empty dup3 empty or not ] [[dup2 first dup2 first < \swap if lpop swap]dip rpush] while swap cat swap cat
+[ #merge - merge two sorted lists
+  #| (list1) (list2) ()
+  () [ dup3 empty dup3 empty or not ] [[dup2 first dup2 first < \swap if lpop swap]dip rpush] while swap cat swap cat
 ] \merge def
 
-#merge sort (splits list recursively until small, then merges until we have original list again)
-[
+[ #msort - merge sort - splits list recursively until small, then merges until we have full sorted list
   [dup small]
   []
   [dup size 2 / splitn]
