@@ -80,9 +80,30 @@ Below are some selected examples from `examples/` directory. Look there to find 
 
 # What's new?
 
-### address sanitizer
-added makefile targets for building and testing concat using address sanitizer
-- finds an overlapping but different set of memory bugs compared to valgrind
+### parser redesign
+
+The old concat code parser was fast and rock solid, but it was thrown together quickly from some old code and I never properly documented it.
+I've now rewritten and fully documented the generic parser (parser.h/c), and properly documented the concat parsing rules (vm\_parser.h/c).
+
+The new parser implementation uses the same table-based finite-state-machine of the old parser, just with a new parser VM/FSM implementation.
+It's structured as a token-threaded vm - like the concat vm, but only 8 opcodes and parsing/tokenizing-specific.
+
+The code is organized to maximize fall through, which makes it look pretty convoluted at first glance.
+On the other hand the core loop is only around 30 lines of code (and <10loc for the validator loop), so it is a lot less code to debug/read.
+I've thoroughly documented the labels the core "loop" jumps to make it easier to follow, so look at those to understand it.
+- The parser now only uses 5 of the 8 opcodes, so I still need to decide what to do with the other 3 (if anything).
+
+parser.h/c are completely generic, with all the concat-specific parsing code in vm\_parser.h/c.
+At some point concat language/vm access to using/building custom parsers is planned, but for now it is just used for parsing concat code.
+
+The interface to parser.h is exactly the same for now so the parser refactor can be done several cleanly separated steps.
+This means there are a bunch of FIXME comments in parser.h/c that describe code that needs to be updated in sync with vm\_parser.h/c to finish the parser refactor.
+
+The concat code parser (vm\_parser.h/c) is also much better documented now
+- The fsm rules are now fully and correctly described in vm\_parser.c
+- Zero code changed yet in vm parser, just proper documentation of the current rules
+- This is only part 1 of the vm parser refactor - still needs changes per parser.h/c notes and some code improvements are planned
+- FIXME comments in vm\_parser.h/c point out the things that need to be looked at in the refactor
 
 
 ### debug val support:
